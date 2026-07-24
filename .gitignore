@@ -1,0 +1,34 @@
+# === 通用忽略 ===
+node_modules/
+*.log
+.DS_Store
+Thumbs.db
+
+# === SSL 证书 ===
+*.crt
+*.key
+*.pem
+
+# === 配置文件 ===
+.env
+.env.local
+.env.*.local
+
+# === Jitsi 运行时数据 ===
+jitsi/jitsi-meet-cfg/prosody/config/data/
+jitsi/jitsi-meet-cfg/prosody/config/certs/
+
+# === 构建产物 ===
+backend/dist/
+frontend/dist/
+frontend/.vite/
+
+# === 编辑器 ===
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# === 临时文件 ===
+tmp/
+temp/

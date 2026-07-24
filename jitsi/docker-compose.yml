@@ -1,0 +1,230 @@
+services:
+    # Frontend - Jitsi Web 界面（nginx）
+    web:
+        image: jitsi/web:${JITSI_IMAGE_VERSION:-stable-9646}
+        restart: ${RESTART_POLICY:-unless-stopped}
+        ports:
+            - '${HTTP_PORT:-8000}:80'
+            - '${HTTPS_PORT:-8443}:443'
+        volumes:
+            - ${CONFIG}/web/custom:/custom
+            - ${CONFIG}/web/letsencrypt:/etc/letsencrypt
+            - ${CONFIG}/web/prosody:/etc/prosody
+            - ./certs/jitsi.crt:/config/keys/cert.crt:ro
+            - ./certs/jitsi.key:/config/keys/cert.key:ro
+        environment:
+            - ENABLE_AUTH
+            - ENABLE_GUESTS
+            - ENABLE_LETSENCRYPT
+            - ENABLE_HTTP_REDIRECT
+            - DISABLE_HTTPS
+            - JICOFO_AUTH_URL
+            - PUBLIC_URL
+            - LETSENCRYPT_DOMAIN
+            - LETSENCRYPT_EMAIL
+            - LETSENCRYPT_USE_STAGING
+            - TZ
+            - XMPP_DOMAIN
+            - XMPP_AUTH_DOMAIN
+            - XMPP_BOSH_URL_BASE
+            - XMPP_GUEST_DOMAIN
+            - XMPP_MUC_DOMAIN
+            - XMPP_RECORDER_DOMAIN
+            - ETHERPAD_URL_BASE
+            - ETHERPAD_PUBLIC_URL
+            - WHITEBOARD_COLLAB_SERVER_PUBLIC_URL
+            - JIBRI_BREWERY_MUC
+            - JIBRI_PENDING_TIMEOUT
+            - JIGASI_BREWERY_MUC
+            - JIGASI_SIP_URI
+            - JIGASI_XMPP_USER
+            - JVB_BREWERY_MUC
+            - COLIBRI_REST_ENABLED
+            - SHUTDOWN_REST_ENABLED
+        networks:
+            meet.jitsi:
+                aliases:
+                    - ${XMPP_DOMAIN:-meet.jitsi}
+
+    # XMPP 服务器 - Prosody
+    prosody:
+        image: jitsi/prosody:${JITSI_IMAGE_VERSION:-stable-9646}
+        restart: ${RESTART_POLICY:-unless-stopped}
+        expose:
+            - '5222'
+            - '5347'
+            - '5280'
+            - '5269'
+        volumes:
+            - ${CONFIG}/prosody/config:/config
+            - ${CONFIG}/prosody/prosody-plugins-custom:/prosody-plugins-custom
+        environment:
+            - AUTH_TYPE
+            - ENABLE_AUTH
+            - ENABLE_GUESTS
+            - ENABLE_LOBBY
+            - ENABLE_MODERATOR_CHECKS
+            - ENABLE_XMPP_WEBSOCKET
+            - ENABLE_JAAS_COMPONENTS
+            - GLOBAL_CONFIG
+            - GLOBAL_MODULES
+            - LDAP_URL
+            - LDAP_BASE
+            - LDAP_BINDDN
+            - LDAP_BINDPW
+            - LDAP_FILTER
+            - LDAP_AUTH_METHOD
+            - LDAP_VERSION
+            - LDAP_USE_STARTTLS
+            - LDAP_TLS_CACERT_FILE
+            - LDAP_TLS_CACERT_DIR
+            - LDAP_START_TLS_NONE
+            - XMPP_DOMAIN
+            - XMPP_AUTH_DOMAIN
+            - XMPP_GUEST_DOMAIN
+            - XMPP_MUC_DOMAIN
+            - XMPP_INTERNAL_MUC_DOMAIN
+            - XMPP_MODULES
+            - XMPP_MUC_MODULES
+            - XMPP_INTERNAL_MUC_MODULES
+            - XMPP_RECORDER_DOMAIN
+            - XMPP_CROSS_DOMAIN
+            - JICOFO_COMPONENT_SECRET
+            - JICOFO_AUTH_PASSWORD
+            - JIGASI_XMPP_PASSWORD
+            - JVB_AUTH_USER
+            - JVB_AUTH_PASSWORD
+            - JVB_XMPP_PASSWORD
+            - JIBRI_RECORDER_USER
+            - JIBRI_RECORDER_PASSWORD
+            - JIBRI_XMPP_USER
+            - JIBRI_XMPP_PASSWORD
+            - JIGASI_XMPP_USER
+            - JIGASI_XMPP_PASSWORD
+            - JWT_APP_ID
+            - JWT_APP_SECRET
+            - JWT_ACCEPTED_ISSUERS
+            - JWT_ACCEPTED_AUDIENCES
+            - JWT_ASAP_KEYSERVER
+            - JWT_ALLOW_EMPTY
+            - JWT_AUTH_TYPE
+            - JWT_TOKEN_AUTH_MODULE
+            - LOG_LEVEL
+            - AUTH_TYPE
+            - PROSODY_RESERVATION_ENABLED
+            - PROSODY_RESERVATION_REST_BASE_URL
+            - PUBLIC_URL
+            - TURN_HOST
+            - TURN_PORT
+            - TURNS_HOST
+            - TURNS_PORT
+            - TURN_TRANSPORT
+            - TZ
+            - PROSODY_ADMINS
+            - PROSODY_ADMIN_PASSWORD
+        networks:
+            meet.jitsi:
+                aliases:
+                    - ${XMPP_SERVER:-xmpp.meet.jitsi}
+
+    # Focus 组件 - Jicofo
+    jicofo:
+        image: jitsi/jicofo:${JITSI_IMAGE_VERSION:-stable-9646}
+        restart: ${RESTART_POLICY:-unless-stopped}
+        volumes:
+            - ${CONFIG}/jicofo:/config
+        environment:
+            - AUTH_TYPE
+            - BRIDGE_AVG_PARTICIPANT_STRESS
+            - BRIDGE_STRESS_THRESHOLD
+            - ENABLE_AUTH
+            - ENABLE_AUTO_OWNER
+            - ENABLE_MODERATOR_CHECKS
+            - JICOFO_AUTH_URL
+            - JICOFO_BRIDGE_REGION_GROUPS
+            - JICOFO_ENABLE_BRIDGE_HEALTH_CHECKS
+            - JICOFO_CONFERENCE_PARTICIPANT_PREFIX
+            - JICOFO_INITIAL_BRIDGES_TIMEOUT
+            - JICOFO_MAX_BRIDGE_PARTICIPANTS
+            - JICOFO_OCTO_SCTP_PORT
+            - JICOFO_OCTO_REGION
+            - JICOFO_TRUSTED_DOMAINS
+            - JIBRI_BREWERY_MUC
+            - JIBRI_PENDING_TIMEOUT
+            - JIGASI_BREWERY_MUC
+            - JIGASI_SIP_URI
+            - JIGASI_XMPP_USER
+            - JVB_BREWERY_MUC
+            - JVB_XMPP_PASSWORD
+            - JWT_APP_ID
+            - JWT_APP_SECRET
+            - JWT_ACCEPTED_ISSUERS
+            - JWT_ACCEPTED_AUDIENCES
+            - JWT_ASAP_KEYSERVER
+            - JWT_ALLOW_EMPTY
+            - JWT_AUTH_TYPE
+            - JWT_TOKEN_AUTH_MODULE
+            - MAX_BRIDGE_PARTICIPANTS
+            - OCTO_BRIDGE_SELECTION_STRATEGY
+            - SENTRY_DSN
+            - SENTRY_ENVIRONMENT
+            - SENTRY_RELEASE
+            - TZ
+            - XMPP_DOMAIN
+            - XMPP_MUC_DOMAIN
+            - XMPP_SERVER
+            - XMPP_AUTH_DOMAIN
+            - JICOFO_COMPONENT_SECRET
+            - JICOFO_AUTH_PASSWORD
+        depends_on:
+            - prosody
+        networks:
+            meet.jitsi:
+
+    # 视频桥接 - JVB
+    jvb:
+        image: jitsi/jvb:${JITSI_IMAGE_VERSION:-stable-9646}
+        restart: ${RESTART_POLICY:-unless-stopped}
+        ports:
+            - '${JVB_PORT:-10000}:${JVB_PORT:-10000}/udp'
+            - '${JVB_HTTP_PORT:-8080}:8080'
+        volumes:
+            - ${CONFIG}/jvb:/config
+        environment:
+            - AUTOSCALER_SIDECAR_KEY_FILE
+            - AUTOSCALER_SIDECAR_KEY_ID
+            - AUTOSCALER_SIDECAR_GROUP_NAME
+            - AUTOSCALER_SIDECAR_HOST
+            - AUTOSCALER_SIDECAR_PORT
+            - AUTOSCALER_SIDECAR_AUTH_TOKEN
+            - SHUTDOWN_REST_ENABLED
+            - VIDEOBRIDGE_REST
+            - COLIBRI_REST_ENABLED
+            - JVB_AUTH_USER
+            - JVB_AUTH_PASSWORD
+            - JVB_BREWERY_MUC
+            - JVB_PORT
+            - JVB_ADVERTISE_IPS
+            - JVB_ADVERTISE_URLS
+            - JVB_DISABLE_TLS
+            - JVB_STUN_SERVERS
+            - JVB_HARVESTER_DISABLED
+            - JVB_WS_DOMAIN
+            - JVB_WS_SERVER_ID
+            - PUBLIC_URL
+            - SENTRY_DSN
+            - SENTRY_ENVIRONMENT
+            - SENTRY_RELEASE
+            - TZ
+            - XMPP_AUTH_DOMAIN
+            - XMPP_INTERNAL_MUC_DOMAIN
+            - XMPP_SERVER
+            - XMPP_DOMAIN
+        depends_on:
+            - prosody
+        networks:
+            meet.jitsi:
+
+networks:
+    meet.jitsi:
+        driver: bridge
