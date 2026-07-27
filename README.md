@@ -10,6 +10,9 @@
 - **会议总结**：主持人一键生成会议纪要
 - **断线重连**：WebSocket 自动重连 + 消息补齐
 - **角色权限**：主持人/参会者区分
+- **AI Gateway**：会议生命周期管理、权限校验、Bot 管理
+- **JWT 认证**：RS256 非对称签名，支持 Jitsi 集成
+- **Redis 状态**：会议状态持久化，支持内存降级
 - **本地部署**：Docker 一键部署 Jitsi
 
 ---
@@ -20,7 +23,8 @@
 |------|------|------|
 | 前端 | React + Vite | 18.2 / 5.0 |
 | 后端 | Express + ws | 4.18 / 8.16 |
-| 认证 | JWT | 9.0 |
+| 认证 | JWT (RS256) | 9.0 |
+| 缓存 | Redis | 4.6 |
 | 视频 | Jitsi Meet | - |
 | 语言 | TypeScript | 5.3 |
 
@@ -30,10 +34,24 @@
 
 ```
 meeting-ai-assistant/
-├── backend/          # Express + WebSocket 服务
-├── frontend/         # React 前端应用
-├── jitsi/            # 本地 Jitsi Docker 部署
-├── CHANGELOG.md      # 变更日志
+├── backend/
+│   ├── src/
+│   │   ├── auth.ts          # JWT 认证（RS256）
+│   │   ├── index.ts         # HTTP 服务 + AI Gateway
+│   │   ├── wsServer.ts      # WebSocket 服务器
+│   │   ├── meetingState.ts  # Redis + 内存会议状态
+│   │   ├── mockLLM.ts       # Mock LLM 总结
+│   │   └── types.ts         # 类型定义
+│   ├── keys/                # RSA 密钥对
+│   └── package.json
+├── frontend/
+│   ├── src/
+│   └── package.json
+├── jitsi/
+│   ├── docker-compose.yml
+│   ├── .env.example
+│   └── start.sh
+├── CHANGELOG.md
 └── README.md
 ```
 
@@ -74,8 +92,51 @@ cd jitsi && cp .env.example .env && ./start.sh
 export const CURRENT_JITSI = 'local'; // 'public' | 'local'
 ```
 
-- `public`: 使用 meet.jit.si（5分钟限制）
-- `local`: 使用本地 Docker 部署
+### JWT 配置
+
+后端使用 RS256 非对称签名：
+- 私钥：`backend/keys/private.pem`
+- 公钥：`backend/keys/public.pem`
+- 环境变量：`JWT_ISSUER`、`JWT_EXPIRES_IN`
+
+### Redis 配置
+
+默认地址：`redis://localhost:6379`，通过 `REDIS_URL` 环境变量覆盖。
+
+---
+
+## 🔌 API 接口
+
+### 获取 JWT Token
+
+```bash
+POST /api/tokens
+Content-Type: application/json
+
+{
+  "roomId": "room-a",
+  "userId": "user-001",
+  "role": "moderator",
+  "userName": "张三"
+}
+```
+
+### 开启 AI 助手
+
+```bash
+POST /api/meetings/{roomId}/ai/start
+Content-Type: application/json
+
+{
+  "token": "your-jwt-token"
+}
+```
+
+### 获取会议状态
+
+```bash
+GET /api/meetings/{roomId}/ai/status?token=your-jwt-token
+```
 
 ---
 
@@ -87,8 +148,9 @@ MIT License
 
 ## 📌 Phase 2 待办
 
-- [ ] 真实 Jitsi JWT 认证
-- [ ] 接入真实 LLM 服务
+- [x] JWT 认证升级（RS256）
+- [x] AI Gateway 模块
+- [x] Redis Meeting State
 - [ ] Recorder Bot 获取个人音频轨道
 - [ ] Streaming ASR 实时转写
 - [ ] 对象存储集成

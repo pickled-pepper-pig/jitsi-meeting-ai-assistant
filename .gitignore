@@ -35,3 +35,6 @@ temp/
 
 # === 技能目录 ===
 .trae/skills/
+
+# === RSA 密钥 ===
+backend/keys/
