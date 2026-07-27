@@ -247,6 +247,7 @@ export default function App() {
           protocol={JITSI_PROTOCOL}
           roomName={roomName}
           displayName={displayName}
+          token={tokenRef.current}
           onIncomingMessage={handleIncomingMessage}
           onOutgoingMessage={handleOutgoingMessage}
           onVideoConferenceLeft={handleVideoConferenceLeft}

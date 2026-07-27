@@ -12,6 +12,23 @@ echo "  Jitsi 本地开发环境启动"
 echo "=========================================="
 echo ""
 
+# 获取当前局域网 IP
+get_local_ip() {
+    local ip=""
+    for iface in en0 en1; do
+        ip=$(ipconfig getifaddr "$iface" 2>/dev/null)
+        if [ -n "$ip" ] && [[ "$ip" != "127."* ]]; then
+            echo "$ip"
+            return 0
+        fi
+    done
+    echo "127.0.0.1"
+}
+
+CURRENT_IP=$(get_local_ip)
+echo "📍 当前局域网 IP: $CURRENT_IP"
+echo ""
+
 # 创建数据目录
 mkdir -p jitsi-meet-cfg/{web/custom,web/letsencrypt,prosody/config,jicofo,jvb,transcripts}
 
@@ -23,6 +40,31 @@ fi
 
 echo "✅ Docker 正在运行"
 echo ""
+
+# 检查并更新配置
+if [ -f .env ]; then
+    OLD_IP=$(grep 'JVB_ADVERTISE_IPS=' .env | cut -d'=' -f2)
+    
+    if [ "$CURRENT_IP" != "$OLD_IP" ]; then
+        echo "🔄 IP 地址已变化：$OLD_IP → $CURRENT_IP"
+        echo "📝 更新配置文件..."
+        
+        sed -i '' "s|PUBLIC_URL=https://.*:8443|PUBLIC_URL=https://$CURRENT_IP:8443|" .env
+        sed -i '' "s|JVB_ADVERTISE_IPS=.*|JVB_ADVERTISE_IPS=$CURRENT_IP|" .env
+        
+        echo "📜 重新生成 Jitsi 证书..."
+        mkcert -cert-file certs/jitsi.crt -key-file certs/jitsi.key localhost 127.0.0.1 "$CURRENT_IP" ::1 > /dev/null 2>&1
+        
+        echo "✅ 配置已更新"
+        echo ""
+    else
+        echo "✅ IP 地址未变化"
+        echo ""
+    fi
+else
+    echo "⚠️  未找到 .env 文件，请先创建"
+    echo ""
+fi
 
 # 启动 Jitsi 服务
 echo "🚀 启动 Jitsi 服务..."
@@ -51,6 +93,7 @@ echo ""
 echo "  访问地址："
 echo "    - HTTP:  http://localhost:8000"
 echo "    - HTTPS: https://localhost:8443"
+echo "    - 局域网: https://$CURRENT_IP:8443"
 echo ""
 echo "  注意事项："
 echo "    1. HTTPS 是自签名证书，浏览器会提示不安全，点击'继续访问'即可"
