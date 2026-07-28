@@ -2,6 +2,21 @@
 
 本项目的所有重要变更都会记录在此文件中。
 
+## [1.1.1]
+
+### fix（修复）
+- 统一端口配置：后端 WebSocket → 8080，Flask API → 8082，前端 → 3000
+- 修复 settings.py 和 main.py 默认端口不一致问题
+
+### refactor（重构）
+- 移除 silan-asr-service/.gitignore，Python 忽略规则合并至根 .gitignore
+- 移除 silan-asr-service/README.md，ASR 文档合并至根 README.md
+- 重写根 README.md：统一端口表、整合 API 文档和 ASR 服务详情、修正所有端口引用
+
+### docs（文档）
+- README.md 新增端口配置表、ASR 服务详情章节
+- README.md 中所有 API 地址改为 8082
+
 ## [1.1.0]
 
 ### feat（新功能）

@@ -41,7 +41,7 @@ def on_session_finalized(data):
 def on_error(data):
     print(f'❌ 错误: {data}')
 
-def run_test(server_url: str = 'http://localhost:50051'):
+def run_test(server_url: str = 'http://localhost:8080'):
     print(f'🔗 连接到 {server_url}...')
     
     try:

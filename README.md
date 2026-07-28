@@ -36,39 +36,54 @@
 ## 📁 结构
 
 ```
-meeting-ai-assistant/
+silan-jitsi/
 ├── silan-asr-service/          # Python 统一后端服务
 │   ├── app/
-│   │   ├── auth/               # JWT 认证（RS256）
-│   │   ├── api_routes/         # HTTP API 路由
-│   │   ├── meeting_ws/         # WebSocket 会议事件处理
-│   │   ├── meeting_state/      # Redis + 内存会议状态
-│   │   ├── llm_service/        # Mock LLM 会议总结
-│   │   ├── audit_log/          # 审计日志
-│   │   ├── audio_gateway/      # WebSocket 网关入口
 │   │   ├── asr_worker/         # FunASR 推理 Worker
+│   │   ├── audio_gateway/      # WebSocket 网关入口
+│   │   ├── audio_processor/    # 音频预处理
 │   │   ├── session_manager/    # ASR 会话管理
 │   │   ├── transcript_service/ # 转写结果分发
-│   │   └── config/             # 配置管理
-│   ├── keys/                   # RSA 密钥对
-│   └── main.py                 # 服务入口
+│   │   ├── normalization/      # 行业术语归一化
+│   │   ├── api_routes/         # HTTP API 路由
+│   │   ├── meeting_ws/         # 会议 WebSocket 处理
+│   │   ├── meeting_state/      # Redis 会议状态
+│   │   ├── auth/               # JWT 认证
+│   │   ├── llm_service/        # Mock LLM 总结
+│   │   ├── audit_log/          # 审计日志
+│   │   └── config/            # 配置管理
+│   ├── resources/vocab/        # 行业热词库
+│   ├── tests/                  # 测试
+│   ├── main.py                 # 服务入口
+│   └── requirements.txt        # Python 依赖
 ├── frontend/
 │   ├── src/
 │   │   ├── components/         # React 组件
 │   │   ├── hooks/              # WebSocket Hook
 │   │   ├── services/           # 音频采集服务
-│   │   ── types/              # 类型定义
+│   │   └── types/              # 类型定义
+│   ├── public/bot.html         # Bot 加入页
 │   └── package.json
-├── jitsi/
-│   ├── docker-compose.yml
-│   ├── .env.example
-│   └── start.sh
-└── README.md
+├── jitsi/                      # Jitsi Docker 部署
+├── README.md
+├── CHANGELOG.md
+└── .gitignore
 ```
 
 ---
 
-##  快速开始
+## 🔌 端口配置
+
+| 服务 | 端口 | 说明 |
+|------|------|------|
+| 前端 (Vite) | **3000** | https://localhost:3000 |
+| ASR WebSocket | **8080** | ws://localhost:8080 |
+| 后端 HTTP API | **8082** | http://localhost:8082（Flask，自动 = WS + 2） |
+| Jitsi Meet | **8443** | https://localhost:8443 |
+
+---
+
+## 快速开始
 
 ### 1. 启动 Jitsi（Docker）
 
@@ -78,17 +93,15 @@ docker compose up -d
 # Jitsi 运行在 https://localhost:8443
 ```
 
-> Jitsi 是开源视频会议引擎，包含 web、prosody、jicofo、jvb 四个容器，官方推荐 Docker Compose 部署。
-
 ### 2. 启动后端 ASR 服务（Python）
 
 ```bash
-# 使用 conda asr 环境（已预装所有依赖）
+# 使用 conda asr 环境
 conda activate asr
 cd silan-asr-service
 python main.py --device cpu
-# WebSocket 监听 0.0.0.0:50051
-# Flask HTTP API 监听 127.0.0.1:50053（自动启动）
+# WebSocket 监听 0.0.0.0:8080
+# Flask HTTP API 自动监听 127.0.0.1:8082
 ```
 
 ### 3. 启动前端（Vite）
@@ -99,15 +112,6 @@ npm install
 npx vite --port 3000 --host
 # 前端运行在 https://localhost:3000
 ```
-
-### 访问地址
-
-| 服务 | 地址 | 说明 |
-|------|------|------|
-| 前端 | https://localhost:3000 | AI 侧边栏界面 |
-| ASR WebSocket | ws://localhost:50051 | 音频转写 + 会议信令 |
-| 后端 HTTP API | http://localhost:50053 | REST 接口（端口 = WS + 2） |
-| Jitsi | https://localhost:8443 | 视频会议引擎 |
 
 ### 完整启动顺序
 
@@ -133,7 +137,7 @@ npx vite --port 3000 --host
 编辑 `silan-asr-service/app/config/settings.py`：
 
 ```python
-port: int = 50051  # WebSocket 端口，Flask API 自动运行在 port + 2
+port: int = 8080  # WebSocket 端口，Flask API 自动运行在 port + 2
 ```
 
 ### 切换 Jitsi 服务
@@ -162,14 +166,14 @@ export const CURRENT_JITSI = 'local'; // 'public' | 'local'
 ### 健康检查
 
 ```bash
-GET /health
+GET http://localhost:8082/health
 ```
 
 ### Token 管理
 
 ```bash
 # 获取 Jitsi JWT Token
-POST /api/tokens
+POST http://localhost:8082/api/tokens
 Content-Type: application/json
 
 {
@@ -180,15 +184,15 @@ Content-Type: application/json
 }
 
 # 验证 Token
-POST /api/tokens/verify
+POST http://localhost:8082/api/tokens/verify
 {"token": "your-jwt-token"}
 
 # 检查是否主持人
-POST /api/tokens/is-moderator
+POST http://localhost:8082/api/tokens/is-moderator
 {"token": "your-jwt-token"}
 
 # 开发环境生成测试 Token
-POST /api/dev/tokens
+POST http://localhost:8082/api/dev/tokens
 Content-Type: application/json
 
 {
@@ -201,7 +205,7 @@ Content-Type: application/json
 
 ```bash
 # 开启 AI 助手
-POST /api/meetings/{roomId}/ai/start
+POST http://localhost:8082/api/meetings/{roomId}/ai/start
 Content-Type: application/json
 
 {
@@ -209,7 +213,7 @@ Content-Type: application/json
 }
 
 # 停止 AI 助手
-POST /api/meetings/{roomId}/ai/stop
+POST http://localhost:8082/api/meetings/{roomId}/ai/stop
 Content-Type: application/json
 
 {
@@ -217,14 +221,14 @@ Content-Type: application/json
 }
 
 # 获取会议 AI 状态
-GET /api/meetings/{roomId}/ai/status?token=your-jwt-token
+GET http://localhost:8082/api/meetings/{roomId}/ai/status?token=your-jwt-token
 ```
 
 ### 参会者 & ASR Session
 
 ```bash
 # 注册参会者
-POST /api/meetings/{roomId}/participants
+POST http://localhost:8082/api/meetings/{roomId}/participants
 Content-Type: application/json
 
 {
@@ -233,7 +237,7 @@ Content-Type: application/json
 }
 
 # 注册 ASR Session
-POST /api/meetings/{roomId}/asr-sessions
+POST http://localhost:8082/api/meetings/{roomId}/asr-sessions
 Content-Type: application/json
 
 {
@@ -246,14 +250,14 @@ Content-Type: application/json
 ### 审计日志
 
 ```bash
-GET /api/audit-logs?roomId=room-a
+GET http://localhost:8082/api/audit-logs?roomId=room-a
 ```
 
 ---
 
 ## 🔗 WebSocket 事件
 
-前端通过原生 WebSocket 与后端通信：
+前端通过原生 WebSocket 与后端通信（开发时通过 Vite 代理 `/ws` → `ws://localhost:8080`）：
 
 ### 会议信令
 
@@ -267,12 +271,12 @@ GET /api/audit-logs?roomId=room-a
 
 | 服务端事件 | 说明 |
 |-----------|------|
-| `meeting_joined` | 确认加入，返回 lastSeq |
-| `meeting_chat` | 广播聊天消息 |
-| `meeting_summary` | 广播会议总结 |
-| `meeting_synced` | 返回错过的消息列表 |
-| `meeting_error` | 错误提示 |
-| `meeting_status` | 状态更新 |
+| `joined` | 确认加入，返回 lastSeq |
+| `chat` | 广播聊天消息 |
+| `summary` | 广播会议总结 |
+| `synced` | 返回错过的消息列表 |
+| `status` | 状态更新 |
+| `error` | 错误提示 |
 
 ### 音频转写
 
@@ -284,10 +288,50 @@ GET /api/audit-logs?roomId=room-a
 
 | 服务端事件 | 说明 |
 |-----------|------|
-| `connected` | 连接确认 |
 | `session_created` | 会话创建成功 |
 | `transcript` | 转写结果（interim + final） |
-| `session_finalized` | 会话结束 |
+| `error` | 错误提示 |
+
+---
+
+## 🎙️ ASR 服务详情
+
+### 特性
+
+- **实时流式 ASR** - 基于 FunASR Paraformer 模型的流式识别
+- **多会话并发** - 支持多个用户同时进行音频转写
+- **行业术语增强** - 内置半导体行业热词库（84 热词 + 62 行业术语）
+- **音频预处理** - 自动重采样、降噪、VAD 语音检测
+- **批处理优化** - Batch Scheduler 提升推理效率
+
+### 命令行参数
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `--port` | 8080 | WebSocket 服务端口 |
+| `--host` | 0.0.0.0 | 服务监听地址 |
+| `--device` | cpu | 推理设备 (cpu/cuda) |
+| `--log-level` | INFO | 日志级别 |
+
+### 音频格式要求
+
+- **采样率**: 16000 Hz（其他采样率自动重采样）
+- **位深度**: 16-bit PCM (float32)
+- **通道数**: 单声道（多声道自动转换）
+- **编码格式**: base64 编码的原始 PCM 数据
+
+### 故障排查
+
+```bash
+# 端口被占用
+lsof -i :8080
+
+# 强制使用 CPU
+python main.py --device cpu
+
+# 降低批处理大小
+ASR_MAX_BATCH_SIZE=16 python main.py
+```
 
 ---
 

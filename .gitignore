@@ -2,15 +2,22 @@
 __pycache__/
 *.py[cod]
 *$py.class
+*.so
 *.egg-info/
+*.egg
+dist/
+build/
 .venv/
 venv/
+env/
+ENV/
 
 # === 通用忽略 ===
 node_modules/
 *.log
 .DS_Store
 Thumbs.db
+desktop.ini
 
 # === SSL 证书 ===
 *.crt
@@ -21,6 +28,11 @@ Thumbs.db
 .env
 .env.local
 .env.*.local
+
+# === 模型缓存 ===
+.cache/modelscope/
+.cache/huggingface/
+.cache/torch/
 
 # === Jitsi 运行时数据 ===
 jitsi/jitsi-meet-cfg/prosody/config/data/
@@ -36,10 +48,12 @@ frontend/.vite/
 .idea/
 *.swp
 *.swo
+*~
 
 # === 临时文件 ===
 tmp/
 temp/
+*.tmp
 
 # === 技能目录 ===
 .trae/skills/
