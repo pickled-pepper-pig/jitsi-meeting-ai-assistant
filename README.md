@@ -87,11 +87,9 @@ docker compose up -d
 conda activate asr
 cd silan-asr-service
 python main.py --device cpu
-# WebSocket 监听 0.0.0.0:8080
-# Flask HTTP API 监听 127.0.0.1:8082
+# WebSocket 监听 0.0.0.0:50051
+# Flask HTTP API 监听 127.0.0.1:50053（自动启动）
 ```
-
-> Flask API 使用 8082 端口（8080 + 2），避免与 Jitsi JVB 容器的 8081 端口冲突。
 
 ### 3. 启动前端（Vite）
 
@@ -107,8 +105,8 @@ npx vite --port 3000 --host
 | 服务 | 地址 | 说明 |
 |------|------|------|
 | 前端 | https://localhost:3000 | AI 侧边栏界面 |
-| 后端 WebSocket | ws://localhost:8080 | 音频转写 + 会议信令 |
-| 后端 HTTP API | http://localhost:8082 | REST 接口 |
+| ASR WebSocket | ws://localhost:50051 | 音频转写 + 会议信令 |
+| 后端 HTTP API | http://localhost:50053 | REST 接口（端口 = WS + 2） |
 | Jitsi | https://localhost:8443 | 视频会议引擎 |
 
 ### 完整启动顺序
@@ -135,7 +133,7 @@ npx vite --port 3000 --host
 编辑 `silan-asr-service/app/config/settings.py`：
 
 ```python
-port: int = 8080  # WebSocket 端口，Flask API = port + 2
+port: int = 50051  # WebSocket 端口，Flask API 自动运行在 port + 2
 ```
 
 ### 切换 Jitsi 服务
@@ -161,9 +159,16 @@ export const CURRENT_JITSI = 'local'; // 'public' | 'local'
 
 ## 🔌 API 接口
 
-### 获取 JWT Token
+### 健康检查
 
 ```bash
+GET /health
+```
+
+### Token 管理
+
+```bash
+# 获取 Jitsi JWT Token
 POST /api/tokens
 Content-Type: application/json
 
@@ -173,11 +178,16 @@ Content-Type: application/json
   "role": "moderator",
   "userName": "张三"
 }
-```
 
-### 开发环境 Token（无需签名）
+# 验证 Token
+POST /api/tokens/verify
+{"token": "your-jwt-token"}
 
-```bash
+# 检查是否主持人
+POST /api/tokens/is-moderator
+{"token": "your-jwt-token"}
+
+# 开发环境生成测试 Token
 POST /api/dev/tokens
 Content-Type: application/json
 
@@ -187,21 +197,56 @@ Content-Type: application/json
 }
 ```
 
-### 开启 AI 助手
+### 会议 AI 管理
 
 ```bash
+# 开启 AI 助手
 POST /api/meetings/{roomId}/ai/start
 Content-Type: application/json
 
 {
   "token": "your-jwt-token"
 }
+
+# 停止 AI 助手
+POST /api/meetings/{roomId}/ai/stop
+Content-Type: application/json
+
+{
+  "token": "your-jwt-token"
+}
+
+# 获取会议 AI 状态
+GET /api/meetings/{roomId}/ai/status?token=your-jwt-token
 ```
 
-### 获取会议状态
+### 参会者 & ASR Session
 
 ```bash
-GET /api/meetings/{roomId}/ai/status?token=your-jwt-token
+# 注册参会者
+POST /api/meetings/{roomId}/participants
+Content-Type: application/json
+
+{
+  "token": "your-jwt-token",
+  "participant": {"id": "p1", "name": "张三"}
+}
+
+# 注册 ASR Session
+POST /api/meetings/{roomId}/asr-sessions
+Content-Type: application/json
+
+{
+  "token": "your-jwt-token",
+  "participantId": "p1",
+  "sessionId": "sess-001"
+}
+```
+
+### 审计日志
+
+```bash
+GET /api/audit-logs?roomId=room-a
 ```
 
 ---
