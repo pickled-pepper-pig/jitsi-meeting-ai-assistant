@@ -101,6 +101,18 @@ export function Sidebar({
 
       <MessageList messages={messages} />
 
+      {/* 实时转写指示器 - 显示当前正在说的内容 */}
+      {audioState && audioState.partialText && (
+        <div className="partial-transcript">
+          <div className="partial-header">
+            <span className="partial-dot"></span>
+            <span className="partial-speaker">{audioState.partialParticipant}</span>
+            <span className="partial-label">正在说...</span>
+          </div>
+          <div className="partial-text">{audioState.partialText}</div>
+        </div>
+      )}
+
       {isModerator && (
         <div className="sidebar-footer">
           <SummaryButton

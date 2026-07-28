@@ -5,6 +5,8 @@ import asyncio
 import base64
 import json
 import logging
+import os
+import ssl
 import threading
 import time
 import uuid
@@ -21,6 +23,7 @@ from app.session_manager.manager import AudioSessionManager
 from app.session_manager.session import SessionStatus
 from app.asr_worker.worker import ASRWorker
 from app.transcript_service.service import TranscriptService
+from app.audio_gateway.transcript_aggregator import TranscriptAggregator
 from app.api_routes import api_bp
 from app.auth import verify_token, is_moderator
 from app.meeting_state import (
@@ -49,35 +52,54 @@ class WebSocketGatewayServer:
         self.session_manager = AudioSessionManager(self.app_config.session_manager)
         self.asr_worker = ASRWorker("ws-gateway-worker", self.app_config.asr_worker)
         self.transcript_service = TranscriptService(self.app_config.transcript_service)
+        self.transcript_aggregator = TranscriptAggregator(silence_timeout_ms=1500)
 
         # 会议 WebSocket 状态
         self._clients: Dict[str, dict] = {}      # ws_id -> {ws, room_id, user_id}
         self._rooms: Dict[str, Set[str]] = {}    # room_id -> set of ws_id
 
         self.asr_worker.start()
+        self.transcript_aggregator.set_callback(self._handle_aggregated_transcript)
+        self.transcript_aggregator.start()
         self._setup_transcript_callback()
         logger.info("WebSocketGatewayServer initialized (native WebSocket)")
 
     def _setup_transcript_callback(self) -> None:
+        """ASR Worker 结果回调 → 送入 Aggregator 聚合"""
         self.asr_worker.set_transcript_callback(self._handle_worker_results)
 
     def _handle_worker_results(self, results: list) -> None:
+        """将 ASR 原始结果送入 Aggregator"""
         for result in results:
-            transcript = {
-                "session_id": result.get("session_id"),
-                "interim_text": result.get("interim_text", ""),
-                "is_final": False,
-                "timestamp": result.get("timestamp", int(time.time() * 1000)),
-            }
-            session = self.session_manager.get_session(transcript["session_id"])
-            if session:
-                transcript["meeting_id"] = session.meeting_id
-                transcript["participant_id"] = session.participant_id
-                self._broadcast_transcript(transcript, session)
+            self.transcript_aggregator.on_asr_result(result)
 
-    def _broadcast_transcript(self, transcript: dict, session) -> None:
-        msg = json.dumps({"type": "transcript", **transcript})
-        for ws_id in self._rooms.get(session.meeting_id, set()):
+    def _handle_aggregated_transcript(self, message: dict) -> None:
+        """
+        Aggregator 回调：处理聚合后的 partial/final 消息
+        
+        message: {
+            "type": "transcript_partial" | "transcript_final",
+            "session_id": str,
+            "meeting_id": str,
+            "participant_id": str,
+            "participant_name": str,
+            "text": str,
+            "timestamp": int,
+        }
+        """
+        msg_type = message["type"]
+        meeting_id = message["meeting_id"]
+        text = message["text"]
+        
+        logger.info(f"[Aggregator] {msg_type}: participant={message.get('participant_name')}, text='{text}'")
+        
+        # 广播到房间所有客户端
+        room_clients = self._rooms.get(meeting_id, set())
+        if not room_clients:
+            return
+        
+        msg = json.dumps(message)
+        for ws_id in room_clients:
             client = self._clients.get(ws_id)
             if client:
                 try:
@@ -85,7 +107,7 @@ class WebSocketGatewayServer:
                         client["ws"].send(msg), self._loop
                     )
                 except Exception as e:
-                    logger.error(f"Broadcast transcript error: {e}")
+                    logger.error(f"Broadcast {msg_type} error: {e}")
 
     # -----------------------------------------------------------------------
     # WebSocket handler
@@ -225,6 +247,12 @@ class WebSocketGatewayServer:
                     client_id=ws_id,
                 )
                 self.transcript_service.register_websocket_client(meeting_id, ws_id)
+                self.transcript_aggregator.register_session(
+                    session_id=session_id,
+                    participant_id=participant_id,
+                    participant_name=participant_name,
+                    meeting_id=meeting_id,
+                )
                 self._rooms.setdefault(meeting_id, set()).add(ws_id)
                 await self._send(ws_id, {
                     "type": "session_created", "session_id": session.session_id,
@@ -267,17 +295,12 @@ class WebSocketGatewayServer:
                 session = self.session_manager.get_session(session_id)
                 if session:
                     try:
-                        final = self.asr_worker.finalize_session(session_id)
-                        if final:
-                            ft = {
-                                "session_id": session_id, "meeting_id": session.meeting_id,
-                                "participant_id": session.participant_id,
-                                "final_text": final.get("final_text", ""),
-                                "is_final": True, "timestamp": int(time.time() * 1000),
-                            }
-                            self._broadcast_transcript(ft, session)
+                        # 通知 Aggregator 注销会话（会发送最终语句）
+                        self.transcript_aggregator.unregister_session(session_id)
+                        # 通知 ASR Worker 结束 session
+                        self.asr_worker.finalize_session(session_id)
                     except Exception as e:
-                        logger.error(f"Finalize error: {e}")
+                        logger.error(f"End session error: {e}")
                     self.session_manager.close_session(session_id)
                     self.transcript_service.unregister_websocket_client(session.meeting_id, ws_id)
 
@@ -294,6 +317,7 @@ class WebSocketGatewayServer:
         for sid in self.session_manager.get_sessions_by_client(ws_id):
             session = self.session_manager.get_session(sid)
             if session:
+                self.transcript_aggregator.unregister_session(sid)
                 self.session_manager.close_session(sid)
                 self.transcript_service.unregister_websocket_client(session.meeting_id, ws_id)
                 self._rooms.get(session.meeting_id, set()).discard(ws_id)
@@ -331,15 +355,31 @@ class WebSocketGatewayServer:
         ).start()
         logger.info(f"Flask HTTP API on 127.0.0.1:{flask_port}")
 
-        # WebSocket 主线程
+        # WebSocket 主线程（启用 SSL，因为前端是 HTTPS 页面）
         async def _run():
             self._loop = asyncio.get_running_loop()
-            async with serve(self._handler, self.config.host, self.config.port):
-                logger.info(f"WebSocket listening on {self.config.host}:{self.config.port}")
+
+            # SSL 配置：使用前端相同的证书（覆盖 192.0.36.227）
+            ssl_ctx = None
+            cert_dir = os.environ.get("SSL_CERT_DIR", "")
+            if cert_dir:
+                cert_path = os.path.join(cert_dir, "localhost+3.pem")
+                key_path = os.path.join(cert_dir, "localhost+3-key.pem")
+                if os.path.exists(cert_path) and os.path.exists(key_path):
+                    ssl_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+                    ssl_ctx.load_cert_chain(cert_path, key_path)
+                    logger.info(f"SSL enabled with cert: {cert_path}")
+                else:
+                    logger.warning("SSL cert not found, running without SSL")
+
+            async with serve(self._handler, self.config.host, self.config.port, ssl=ssl_ctx):
+                proto = "wss" if ssl_ctx else "ws"
+                logger.info(f"WebSocket listening on {proto}://{self.config.host}:{self.config.port}")
                 await asyncio.Future()
 
         asyncio.run(_run())
 
     def stop(self) -> None:
         logger.info("Stopping WebSocket Gateway...")
+        self.transcript_aggregator.stop()
         self.asr_worker.stop()

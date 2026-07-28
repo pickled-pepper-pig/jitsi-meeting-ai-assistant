@@ -25,6 +25,8 @@ export interface AudioCaptureState {
     isLocal: boolean;
   }>;
   transcripts: TranscriptResult[];
+  partialText: string;  // 当前正在说的文本（实时更新）
+  partialParticipant: string;  // 正在说话的人
   audioChunks: number;
   startTime?: number;
 }

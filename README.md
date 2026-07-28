@@ -24,7 +24,7 @@
 |------|------|------|
 | 前端 | React + Vite | 18.2 / 5.0 |
 | 后端 | Python (websockets + Flask) | 3.x |
-| ASR | FunASR Paraformer (流式) | - |
+| ASR | FunASR Paraformer (流式) | 1.3.30 |
 | 通信 | 原生 WebSocket | websockets |
 | 认证 | JWT (RS256) | PyJWT |
 | 缓存 | Redis | redis-py |
@@ -348,6 +348,7 @@ MIT License
 - [x] Redis Meeting State
 - [x] 后端迁移至 Python 统一服务 (silan-asr-service)
 - [x] 前后端统一为原生 WebSocket 协议
-- [ ] Recorder Bot 获取个人音频轨道
+- [x] Recorder Bot Spike 验证（lib-jitsi-meet 远程音轨捕获）
+- [x] ASR 服务模型修复（funasr 1.3.30 + paraformer-zh-streaming）
 - [ ] Streaming ASR 实时转写（集成 FunASR）
 - [ ] 对象存储集成

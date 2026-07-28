@@ -13,8 +13,8 @@ class AudioProcessorConfig:
     sample_rate: int = 16000
     channel_count: int = 1
     vad_threshold: float = 0.001
-    agc_enabled: bool = True
-    denoise_enabled: bool = True
+    agc_enabled: bool = False  # 浏览器 getUserMedia 已做 AGC，后端不再重复处理
+    denoise_enabled: bool = False  # 浏览器已做降噪
     echo_cancel_enabled: bool = False
     chunk_duration_ms: int = 60
 

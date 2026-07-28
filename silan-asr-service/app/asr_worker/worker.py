@@ -104,6 +104,7 @@ class ASRWorker:
         self.scheduler.set_batch_callback(self._process_batch)
         
         self.model = None
+        self.punc_model = None  # 标点恢复模型
         self.session_states: Dict[str, object] = {}
         self._transcript_callback: Optional[Callable] = None
         
@@ -129,6 +130,21 @@ class ASRWorker:
             
             self.model = AutoModel(**model_args)
             logger.info(f"ASR model loaded successfully on {self.config.device}")
+            
+            # 加载标点恢复模型（CT-Transformer）
+            try:
+                logger.info("Loading punctuation model: ct-punc")
+                punc_model_args = {
+                    "model": "ct-punc",
+                    "disable_pbar": True
+                }
+                if self.config.device == "cuda":
+                    punc_model_args["device"] = "cuda"
+                self.punc_model = AutoModel(**punc_model_args)
+                logger.info("Punctuation model loaded successfully")
+            except Exception as e:
+                logger.warning(f"Failed to load punctuation model, will skip punctuation restoration: {e}")
+                self.punc_model = None
             
             if self.config.hotword_file:
                 self._load_hotwords()
@@ -180,6 +196,8 @@ class ASRWorker:
                 result = self._process_single(task)
                 if result:
                     results.append(result)
+                # 每个 chunk 处理后释放 GIL，让 WebSocket 事件循环有机会运行
+                time.sleep(0)
             
             if results and self._transcript_callback:
                 self._transcript_callback(results)
@@ -215,9 +233,12 @@ class ASRWorker:
             if result and len(result) > 0:
                 text = result[0].get("text", "")
                 logger.info(f"Recognized text: '{text}'")
+                
+                # 如果有标点模型，对 final 文本进行标点恢复
+                # 注意：partial 结果不做标点恢复，避免性能开销
                 return {
                     "session_id": task.session_id,
-                    "interim_text": text,
+                    "interim_text": text,  # partial 不带标点
                     "final_text": "",
                     "timestamp": task.timestamp,
                     "confidence": result[0].get("confidence", 0.0)
@@ -239,6 +260,30 @@ class ASRWorker:
         indices = np.linspace(0, length - 1, new_length)
         return np.interp(indices, np.arange(length), audio).astype(audio.dtype)
     
+    def _add_punctuation(self, text: str) -> str:
+        """
+        使用标点恢复模型为文本添加标点符号
+        
+        Args:
+            text: 原始文本（无标点）
+            
+        Returns:
+            带标点的文本，如果标点模型不可用则返回原文本
+        """
+        if not self.punc_model or not text.strip():
+            return text
+        
+        try:
+            result = self.punc_model.generate(input=text)
+            if result and len(result) > 0:
+                punctuated_text = result[0].get("text", text)
+                logger.debug(f"Punctuation added: '{text}' -> '{punctuated_text}'")
+                return punctuated_text
+            return text
+        except Exception as e:
+            logger.warning(f"Failed to add punctuation: {e}")
+            return text
+    
     def finalize_session(self, session_id: str) -> Optional[dict]:
         try:
             if session_id not in self.session_states:
@@ -257,9 +302,12 @@ class ASRWorker:
             del self.session_states[session_id]
             
             if result and len(result) > 0:
+                text = result[0].get("text", "")
+                # 对 final 文本进行标点恢复
+                punctuated_text = self._add_punctuation(text)
                 return {
                     "session_id": session_id,
-                    "final_text": result[0].get("text", ""),
+                    "final_text": punctuated_text,
                     "timestamp": int(time.time() * 1000)
                 }
             return None

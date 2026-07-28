@@ -37,9 +37,9 @@ function getBackendBaseUrl(): string {
 }
 
 function getBackendWsUrl(): string {
-  if (typeof window === 'undefined') return 'ws://localhost:8080';
-  // 通过 Vite 代理 /ws → 后端 WebSocket 8080
-  return `${window.location.origin}/ws`;
+  // 直接连接后端 WebSocket 服务（WSS，因为前端是 HTTPS 页面）
+  const hostname = getJitsiHost();
+  return `wss://${hostname}:${BACKEND_PORT}`;
 }
 
 export const API_CONFIG = {

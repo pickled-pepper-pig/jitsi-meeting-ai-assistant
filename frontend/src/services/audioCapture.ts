@@ -23,6 +23,8 @@ export class AudioCaptureService {
       status: 'idle',
       participants: [],
       transcripts: [],
+      partialText: '',
+      partialParticipant: '',
       audioChunks: 0,
     };
   }
@@ -189,18 +191,32 @@ export class AudioCaptureService {
   private handleServerMessage(data: string): void {
     try {
       const msg = JSON.parse(data);
-      if (msg.type === 'transcript') {
-        this.handleTranscript(msg);
+      if (msg.type === 'transcript_partial') {
+        this.handlePartialTranscript(msg);
+      } else if (msg.type === 'transcript_final') {
+        this.handleFinalTranscript(msg);
       }
     } catch {}
   }
 
-  private handleTranscript(result: any): void {
+  private handlePartialTranscript(result: any): void {
+    // 更新当前正在说的文本（实时显示）
+    this.state.partialText = result.text || '';
+    this.state.partialParticipant = result.participant_name || '';
+    this.notify();
+  }
+
+  private handleFinalTranscript(result: any): void {
+    // 清空 partial 显示
+    this.state.partialText = '';
+    this.state.partialParticipant = '';
+    
+    // 添加到正式转写列表
     const transcript: TranscriptResult = {
-      type: result.is_final ? 'final' : 'partial',
+      type: 'final',
       roomId: result.meeting_id || this.config.roomId,
       participantId: result.participant_id || '',
-      text: result.interim_text || result.final_text || '',
+      text: result.text || '',
       timestamp: result.timestamp || Date.now(),
     };
     this.state.transcripts = [...this.state.transcripts, transcript];

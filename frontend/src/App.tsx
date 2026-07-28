@@ -199,8 +199,8 @@ export default function App() {
     setBotStatus('starting');
 
     try {
-      // 通过 Vite 代理 /ws → 后端 WebSocket 8080
-      const wsUrl = `${window.location.origin}/ws`;
+      // 直接连接后端 WebSocket 服务（不走 Vite 代理）
+      const wsUrl = API_CONFIG.wsUrl;
 
       const audioService = new AudioCaptureService({
         roomId: roomName,
@@ -210,7 +210,31 @@ export default function App() {
       });
 
       audioServiceRef.current = audioService;
-      audioService.subscribe((state) => setAudioState(state));
+      audioService.subscribe((state) => {
+        setAudioState(state);
+        // 只将 final 转写结果添加到消息列表
+        if (state.transcripts.length > 0) {
+          const latestTranscript = state.transcripts[state.transcripts.length - 1];
+          if (latestTranscript.text && latestTranscript.type === 'final') {
+            setMessages(prev => {
+              // 避免重复添加相同的转写结果
+              const lastMsg = prev[prev.length - 1];
+              if (lastMsg && lastMsg.sender === 'AI 转写' && lastMsg.content === latestTranscript.text) {
+                return prev;
+              }
+              return [...prev, {
+                id: `transcript-${latestTranscript.timestamp}`,
+                seq: Date.now(),
+                roomId: roomName,
+                sender: 'AI 转写',
+                content: latestTranscript.text,
+                timestamp: latestTranscript.timestamp,
+                type: 'text' as const,
+              }];
+            });
+          }
+        }
+      });
       await audioService.start();
       setBotStatus('started');
       console.log('[App] AI Bot 已启动，音频采集中...');

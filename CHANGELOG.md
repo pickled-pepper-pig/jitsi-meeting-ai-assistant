@@ -2,23 +2,58 @@
 
 本项目的所有重要变更都会记录在此文件中。
 
-## [1.2.0] - 2026-07-28
+## [1.3.1] - 2026-07-28
+
+### fix（修复）
+- 修复 silan-asr-service 模型加载失败：升级 funasr 1.3.14 → 1.3.30，模型名改为 `paraformer-zh-streaming`
+- 相关文件：silan-asr-service/app/config/settings.py
 
 ### feat（新功能）
-- Recorder Bot Spike: 重写 bot.html，实现 Jitsi 远程音轨捕获验证
-  - 使用 Jitsi IFrame API 加入会议（AI Bot 身份）
-  - 监听 trackAdded/trackRemoved 事件获取远程参与者音轨
-  - 实现 MediaStreamTrack → MediaStream → AudioContext(16kHz) → ScriptProcessor → PCM16 管道
-  - 实现 PCM16 → WAV 编码，按参与者保存下载
-  - 实时 UI：参会者状态、音轨录制状态、音频块计数、WAV 下载列表
-  - 支持 3 种音轨获取方式（MediaStreamTrack 直传、JitsiTrack API、conference 回溯）
-- 新增 `recorder-bot-spike` 验证链路：Jitsi Remote Track → PCM16 → WAV
+- 新增转写结果聚合器（transcript_aggregator.py）
+- 新增 PCM 转换模块（pcmConverter.ts）
+- 新增参与者音频接收模块（participantAudioReceiver.ts）
+- 音频捕获服务支持实时电平监测和后端推送
+- 前端新增邀请链接复制功能
+- Jitsi iframe 补全 allow 权限（microphone、camera、fullscreen、autoplay、display-capture）
+- 相关文件：silan-asr-service/app/audio_gateway/transcript_aggregator.py, frontend/src/services/pcmConverter.ts, frontend/src/services/participantAudioReceiver.ts, frontend/src/services/audioCapture.ts, frontend/src/services/audioTypes.ts, frontend/src/App.tsx, frontend/src/App.css, frontend/src/components/Sidebar.tsx
+
+### chore（维护）
+- 更新 JVB 配置和 Jitsi web 配置
+- 相关文件：jitsi/jitsi-meet-cfg/jvb/jvb.conf, frontend/src/config.ts
+
+## [1.3.0] - 2026-07-28
+
+### feat（新功能）
+- Recorder Bot Spike v3: 完整重写 Spike 验证工具，实现模块化架构
+  - 新增 `pcmConverter.ts` 模块: PCM16 转换、重采样、WAV 编码/下载工具
+  - 新增 `participantAudioReceiver.ts` 模块: 接收 Jitsi 远程音轨的核心管道
+    - 订阅 `TRACK_ADDED` 事件获取 `MediaStreamTrack`
+    - 自动检测 AudioContext 采样率并进行线性重采样（目标 16kHz）
+    - 支持实时音频电平监测和捕获状态管理
+    - 预留后端 WebSocket 音频推送接口（`sendToBackend` 选项）
+  - 重构 `bot.html`: 5 步验证流水线可视化 UI
+    - Step 1: 加入会议 → Step 2: 监听 TRACK_ADDED → Step 3: MediaStream → AudioContext → Step 4: PCM16 转换 → Step 5: 保存 WAV
+    - 实时音频电平表显示每个参与者的音量
+    - 按参与者独立保存 WAV 文件（支持离线 FunASR 验证）
+  - 核心验证链路: `Jitsi Track → MediaStream → AudioContext → PCM16 → WAV`
+  - 架构方向: 浏览器 Spike 验证通过后 → Node.js Bot MVP
+
+## [1.2.1] - 2026-07-28
+
+### feat（新功能）
+- Recorder Bot Spike v2: 改用 lib-jitsi-meet 低层 API 替代 Jitsi IFrame API
+  - 直接使用 `JitsiConnection` + `JitsiConference` 建立 XMPP WebSocket 连接
+  - 通过 `TRACK_ADDED` / `TRACK_REMOVED` 事件直接获取远程音轨的 `MediaStreamTrack`
+  - 实现 AudioContext 采样率自动检测 + 线性重采样回退（16kHz 目标）
+  - 修复 IFrame API 无法获取 `MediaStreamTrack` 的限制
 
 ### fix（修复）
 - 修复 bot.html API 参数名 `room` → `roomId`（与后端 API 对齐）
 
-### refactor（重构）
-- bot.html 从简单 iframe 演示升级为完整的 Spike 验证工具
+## [1.2.0] - 2026-07-28
+
+### feat（新功能）
+- Recorder Bot Spike: 初版 bot.html，基于 Jitsi IFrame API 实现音轨捕获
 
 ## [1.1.1] - 2026-07-28
 
@@ -35,7 +70,7 @@
 - README.md 新增端口配置表、ASR 服务详情章节
 - README.md 中所有 API 地址改为 8082
 
-## [1.1.0]
+## [1.1.0] - 2026-07-27
 
 ### feat（新功能）
 - 迁移后端至 Python ASR 服务（`silan-asr-service/`）
