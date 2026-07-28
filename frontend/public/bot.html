@@ -3,324 +3,724 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>AI Bot - Jitsi Recorder</title>
+  <title>🤖 Recorder Bot Spike - Jitsi 音频采集验证</title>
   <style>
+    * { box-sizing: border-box; }
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      background: #1a1a2e;
-      color: white;
+      background: #0f0f1a;
+      color: #e0e0e0;
       margin: 0;
       padding: 20px;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
       min-height: 100vh;
     }
-    .container {
-      max-width: 800px;
-      width: 100%;
-    }
+    .container { max-width: 960px; margin: 0 auto; }
     h1 {
       text-align: center;
       color: #00d4ff;
-      margin-bottom: 20px;
+      margin-bottom: 8px;
+      font-size: 28px;
     }
-    .status {
-      background: #16213e;
-      border-radius: 12px;
-      padding: 20px;
-      margin-bottom: 20px;
+    .subtitle {
+      text-align: center;
+      color: #888;
+      margin-bottom: 24px;
+      font-size: 14px;
     }
-    .status-item {
+    .config-bar {
+      background: #1a1a2e;
+      border-radius: 10px;
+      padding: 12px 16px;
+      margin-bottom: 16px;
       display: flex;
-      justify-content: space-between;
-      padding: 10px 0;
-      border-bottom: 1px solid #333;
-    }
-    .status-item:last-child {
-      border-bottom: none;
-    }
-    .status-label {
-      color: #aaa;
-    }
-    .status-value {
-      font-weight: bold;
-    }
-    .status-value.success {
-      color: #00ff88;
-    }
-    .status-value.error {
-      color: #ff4444;
-    }
-    .status-value.pending {
-      color: #ffaa00;
-    }
-    .iframe-container {
-      background: #000;
-      border-radius: 12px;
-      overflow: hidden;
-      margin-bottom: 20px;
-      box-shadow: 0 10px 40px rgba(0,0,0,0.5);
-    }
-    iframe {
-      width: 100%;
-      height: 400px;
-      border: none;
-    }
-    .controls {
-      display: flex;
-      gap: 10px;
-      justify-content: center;
+      gap: 12px;
+      align-items: center;
       flex-wrap: wrap;
     }
+    .config-bar label {
+      font-size: 13px;
+      color: #888;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .config-bar input {
+      background: #0d0d1a;
+      border: 1px solid #333;
+      color: #e0e0e0;
+      padding: 6px 10px;
+      border-radius: 6px;
+      font-size: 13px;
+      width: 200px;
+    }
+    .config-bar input:focus {
+      outline: none;
+      border-color: #00d4ff;
+    }
+    .status-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+    .status-card {
+      background: #16213e;
+      border-radius: 10px;
+      padding: 14px;
+      text-align: center;
+    }
+    .status-label { font-size: 12px; color: #888; margin-bottom: 6px; }
+    .status-value { font-size: 22px; font-weight: bold; }
+    .status-value.success { color: #00ff88; }
+    .status-value.error { color: #ff4444; }
+    .status-value.pending { color: #ffaa00; }
+    .status-value.idle { color: #666; }
+
+    .participants-section {
+      background: #16213e;
+      border-radius: 10px;
+      padding: 16px;
+      margin-bottom: 16px;
+    }
+    .section-title {
+      font-size: 14px;
+      color: #888;
+      margin-bottom: 12px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .participant-list { display: flex; flex-direction: column; gap: 8px; }
+    .participant-item {
+      background: #0d0d1a;
+      border-radius: 8px;
+      padding: 10px 14px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border: 1px solid #222;
+    }
+    .participant-info { display: flex; align-items: center; gap: 10px; }
+    .participant-name { font-weight: bold; font-size: 14px; }
+    .participant-id { font-size: 11px; color: #666; font-family: monospace; }
+    .participant-status { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+    .recording-dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: #ff4444;
+      animation: pulse 1s infinite;
+    }
+    .recording-dot.active { background: #00ff88; }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+    .audio-meter {
+      display: flex;
+      align-items: center;
+      gap: 2px;
+      height: 16px;
+    }
+    .audio-meter-bar {
+      width: 3px;
+      background: #00d4ff;
+      border-radius: 1px;
+      transition: height 0.1s;
+    }
+
+    .downloads-section {
+      background: #16213e;
+      border-radius: 10px;
+      padding: 16px;
+      margin-bottom: 16px;
+    }
+    .download-list { display: flex; flex-direction: column; gap: 6px; }
+    .download-item {
+      background: #0d0d1a;
+      border-radius: 6px;
+      padding: 8px 12px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 13px;
+    }
+    .download-name { color: #00d4ff; font-family: monospace; }
+    .download-size { color: #888; font-size: 12px; }
+    .download-item a {
+      color: #00ff88;
+      text-decoration: none;
+      font-size: 12px;
+      padding: 4px 10px;
+      border: 1px solid #00ff88;
+      border-radius: 4px;
+      transition: all 0.2s;
+    }
+    .download-item a:hover { background: #00ff88; color: #0d0d1a; }
+
+    .controls {
+      display: flex;
+      gap: 12px;
+      justify-content: center;
+      margin-bottom: 16px;
+    }
     button {
-      padding: 12px 24px;
+      padding: 12px 28px;
       border: none;
       border-radius: 8px;
-      font-size: 16px;
+      font-size: 15px;
       font-weight: bold;
       cursor: pointer;
       transition: all 0.2s;
     }
-    button.start {
-      background: #00d4ff;
-      color: #1a1a2e;
-    }
-    button.start:hover {
-      background: #00b8e6;
-    }
-    button.stop {
-      background: #ff4444;
-      color: white;
-    }
-    button.stop:hover {
-      background: #cc3333;
-    }
-    button:disabled {
-      opacity: 0.5;
-      cursor: not-allowed;
-    }
+    .btn-start { background: #00d4ff; color: #0d0d1a; }
+    .btn-start:hover { background: #00b8e6; }
+    .btn-stop { background: #ff4444; color: white; }
+    .btn-stop:hover { background: #cc3333; }
+    button:disabled { opacity: 0.4; cursor: not-allowed; }
+
     .log {
       background: #0d0d1a;
       border-radius: 8px;
-      padding: 15px;
-      height: 200px;
+      padding: 12px 14px;
+      height: 180px;
       overflow-y: auto;
-      font-family: monospace;
+      font-family: 'SF Mono', monospace;
       font-size: 12px;
-      margin-top: 20px;
+      border: 1px solid #222;
     }
-    .log-entry {
-      padding: 5px 0;
-      border-bottom: 1px solid #222;
-    }
-    .log-time {
-      color: #666;
-      margin-right: 10px;
-    }
-    .log-success {
-      color: #00ff88;
-    }
-    .log-error {
-      color: #ff4444;
-    }
-    .log-info {
-      color: #00d4ff;
-    }
-    .audio-indicator {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      margin-top: 20px;
-    }
-    .audio-wave {
-      display: flex;
-      align-items: center;
-      gap: 3px;
-      height: 20px;
-    }
-    .audio-bar {
-      width: 4px;
-      background: #00d4ff;
-      animation: wave 0.5s infinite;
-    }
-    .audio-bar:nth-child(1) { animation-delay: 0s; height: 8px; }
-    .audio-bar:nth-child(2) { animation-delay: 0.1s; height: 14px; }
-    .audio-bar:nth-child(3) { animation-delay: 0.2s; height: 20px; }
-    .audio-bar:nth-child(4) { animation-delay: 0.3s; height: 14px; }
-    .audio-bar:nth-child(5) { animation-delay: 0.4s; height: 8px; }
-    @keyframes wave {
-      0%, 100% { transform: scaleY(1); }
-      50% { transform: scaleY(0.5); }
-    }
-    .hidden {
-      display: none;
+    .log-entry { padding: 3px 0; line-height: 1.5; }
+    .log-time { color: #555; margin-right: 8px; }
+    .log-msg-info { color: #00d4ff; }
+    .log-msg-success { color: #00ff88; }
+    .log-msg-error { color: #ff4444; }
+    .log-msg-warn { color: #ffaa00; }
+    .log-msg-debug { color: #666; }
+
+    .hidden { display: none !important; }
+    .spike-stage {
+      font-size: 11px;
+      color: #ffaa00;
+      background: rgba(255,170,0,0.1);
+      padding: 4px 10px;
+      border-radius: 10px;
+      margin-left: 8px;
     }
   </style>
 </head>
 <body>
   <div class="container">
-    <h1>🤖 AI Bot - Jitsi Recorder</h1>
-    
-    <div class="status">
-      <div class="status-item">
-        <span class="status-label">状态</span>
-        <span class="status-value pending" id="status">未启动</span>
+    <h1>🤖 Recorder Bot Spike <span class="spike-stage">Phase 1: 音频采集验证</span></h1>
+    <div class="subtitle">验证: Jitsi 远程音轨获取 → PCM16 转换 → WAV 保存</div>
+
+    <div class="config-bar">
+      <label>会议房间:
+        <input type="text" id="roomInput" value="spike-test">
+      </label>
+      <label>Bot 名称:
+        <input type="text" id="nameInput" value="AI Assistant">
+      </label>
+      <label>Jitsi:
+        <input type="text" id="jitsiInput" value="https://192.0.36.227:8443" style="width:240px">
+      </label>
+    </div>
+
+    <div class="status-grid">
+      <div class="status-card">
+        <div class="status-label">Bot 状态</div>
+        <div class="status-value idle" id="statusBot">未启动</div>
       </div>
-      <div class="status-item">
-        <span class="status-label">会议</span>
-        <span class="status-value" id="room">spike-test</span>
+      <div class="status-card">
+        <div class="status-label">参会者</div>
+        <div class="status-value idle" id="statusParticipants">0</div>
       </div>
-      <div class="status-item">
-        <span class="status-label">参会者</span>
-        <span class="status-value" id="participants">0</span>
+      <div class="status-card">
+        <div class="status-label">录制音轨</div>
+        <div class="status-value idle" id="statusTracks">0</div>
       </div>
-      <div class="status-item">
-        <span class="status-label">音频块</span>
-        <span class="status-value" id="audioChunks">0</span>
+      <div class="status-card">
+        <div class="status-label">音频块 (总)</div>
+        <div class="status-value idle" id="statusChunks">0</div>
       </div>
     </div>
-    
+
+    <div class="participants-section">
+      <div class="section-title">👥 参会者 & 音轨</div>
+      <div class="participant-list" id="participantList">
+        <div style="color:#666; font-size:13px; text-align:center; padding:20px;">等待 Bot 加入会议...</div>
+      </div>
+    </div>
+
+    <div class="downloads-section">
+      <div class="section-title">💾 WAV 文件 (按参与者保存)</div>
+      <div class="download-list" id="downloadList">
+        <div style="color:#666; font-size:13px; text-align:center; padding:12px;">停止 Bot 后可下载各参与者的 WAV 文件</div>
+      </div>
+    </div>
+
     <div class="controls">
-      <button class="start" id="startBtn">启动 Bot</button>
-      <button class="stop" id="stopBtn" disabled>停止 Bot</button>
+      <button class="btn-start" id="startBtn">▶ 启动 Bot</button>
+      <button class="btn-stop" id="stopBtn" disabled>■ 停止 Bot 并保存</button>
     </div>
-    
-    <div class="iframe-container hidden" id="iframeContainer">
-      <iframe id="jitsiFrame" allow="camera; microphone; display-capture"></iframe>
-    </div>
-    
-    <div class="audio-indicator hidden" id="audioIndicator">
-      <span>🎤 音频采集中</span>
-      <div class="audio-wave">
-        <div class="audio-bar"></div>
-        <div class="audio-bar"></div>
-        <div class="audio-bar"></div>
-        <div class="audio-bar"></div>
-        <div class="audio-bar"></div>
-      </div>
-    </div>
-    
-    <div class="log" id="log">
-      <div class="log-entry"><span class="log-time">[系统]</span> AI Bot 已就绪</div>
-    </div>
+
+    <div class="log" id="log"></div>
   </div>
 
   <script>
-    const startBtn = document.getElementById('startBtn');
-    const stopBtn = document.getElementById('stopBtn');
-    const statusEl = document.getElementById('status');
-    const roomEl = document.getElementById('room');
-    const participantsEl = document.getElementById('participants');
-    const audioChunksEl = document.getElementById('audioChunks');
-    const iframeContainer = document.getElementById('iframeContainer');
-    const jitsiFrame = document.getElementById('jitsiFrame');
-    const audioIndicator = document.getElementById('audioIndicator');
-    const logEl = document.getElementById('log');
+  // ============================================================
+  //  Recorder Bot Spike - Phase 1
+  //  验证链路: Jitsi IFrame API → Remote Track → PCM16 → WAV
+  // ============================================================
 
-    let isRunning = false;
-    let audioInterval = null;
-    let audioChunks = 0;
+  const el = (id) => document.getElementById(id);
+  const logEl = el('log');
 
-    function log(message, type = 'info') {
-      const entry = document.createElement('div');
-      entry.className = 'log-entry';
-      entry.innerHTML = `<span class="log-time">[${new Date().toLocaleTimeString()}]</span><span class="log-${type}">${message}</span>`;
-      logEl.appendChild(entry);
-      logEl.scrollTop = logEl.scrollHeight;
+  function log(msg, type = 'info') {
+    const t = new Date().toLocaleTimeString();
+    const entry = document.createElement('div');
+    entry.className = 'log-entry';
+    const typeMap = { info: 'info', success: 'success', error: 'error', warn: 'warn', debug: 'debug' };
+    entry.innerHTML = `<span class="log-time">[${t}]</span><span class="log-msg-${typeMap[type]||'info'}">${msg}</span>`;
+    logEl.appendChild(entry);
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+
+  // === 状态 ===
+  let jitsiAPI = null;
+  let audioContext = null;
+  let isBotRunning = false;
+  let totalChunks = 0;
+  const participantMap = new Map();   // id → { name, isBot }
+  const captureMap = new Map();       // id → { name, track, source, processor, stream, chunks, startTime }
+  const savedWAVs = [];               // { participantId, name, url, size }
+
+  // === Jitsi IFrame API 加载 ===
+  function loadJitsiAPI() {
+    return new Promise((resolve, reject) => {
+      if (window.JitsiMeetExternalAPI) { resolve(); return; }
+      const script = document.createElement('script');
+      const jitsiUrl = el('jitsiInput').value.replace(/\/$/, '');
+      script.src = jitsiUrl + '/libs/external_api.min.js';
+      script.onload = () => {
+        if (window.JitsiMeetExternalAPI) resolve();
+        else reject(new Error('Jitsi IFrame API 加载后 JitsiMeetExternalAPI 不存在'));
+      };
+      script.onerror = () => reject(new Error('无法加载 Jitsi IFrame API: ' + script.src));
+      document.head.appendChild(script);
+    });
+  }
+
+  // === Bot 控制 ===
+  async function startBot() {
+    const roomName = el('roomInput').value.trim();
+    const botName = el('nameInput').value.trim();
+    const jitsiUrl = el('jitsiInput').value.trim();
+    const jitsiDomain = jitsiUrl.replace(/^https?:\/\//, '').replace(/\/$/, '');
+
+    if (!roomName) { alert('请输入会议房间名'); return; }
+
+    el('startBtn').disabled = true;
+    el('stopBtn').disabled = false;
+    el('statusBot').textContent = '加载中...';
+    el('statusBot').className = 'status-value pending';
+    log('加载 Jitsi IFrame API...', 'info');
+
+    try {
+      await loadJitsiAPI();
+      log('Jitsi IFrame API 加载成功', 'success');
+    } catch (e) {
+      log('加载失败: ' + e.message, 'error');
+      el('startBtn').disabled = false;
+      el('stopBtn').disabled = true;
+      el('statusBot').textContent = '加载失败';
+      el('statusBot').className = 'status-value error';
+      return;
     }
 
-    function updateStatus(text, type = 'pending') {
-      statusEl.textContent = text;
-      statusEl.className = `status-value ${type}`;
-    }
+    try {
+      // 获取 JWT
+      log('获取 JWT Token...', 'info');
+      const tokenResp = await fetch('/api/tokens', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ roomId: '*' + roomName, userId: 'ai-bot', role: 'moderator' })
+      });
+      const tokenData = await tokenResp.json();
+      const jwtToken = tokenData.token;
+      log('JWT Token 获取成功', 'success');
 
-    async function getJwtToken() {
-      try {
-        const response = await fetch('/api/tokens', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            room: '*spike-test',
-            userId: 'ai-bot',
-            role: 'moderator',
-          }),
-        });
-        const data = await response.json();
-        return data.token;
-      } catch (err) {
-        log('获取 JWT Token 失败: ' + err.message, 'error');
-        throw err;
+      // 加载音频上下文 (16kHz)
+      audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+      log(`AudioContext 采样率: ${audioContext.sampleRate}Hz`, 'debug');
+
+      // 创建 Jitsi 会议
+      log(`创建 Jitsi 会议: ${roomName} (domain: ${jitsiDomain})`, 'info');
+      jitsiAPI = new JitsiMeetExternalAPI(jitsiDomain, {
+        roomName: roomName,
+        jwt: jwtToken,
+        configOverwrite: {
+          startWithAudioMuted: true,
+          startWithVideoMuted: true,
+          disableModeratorIndicator: true,
+        },
+        interfaceConfigOverwrite: {
+          showConferenceTimer: false,
+          SHOW_JITSI_WATERMARK: false,
+        },
+      });
+
+      // 注册事件
+      jitsiAPI.addEventListener('readyToClose', () => log('会议已关闭', 'warn'));
+      jitsiAPI.addEventListener('errorOccurred', (e) => log('Jitsi 错误: ' + JSON.stringify(e), 'error'));
+
+      jitsiAPI.addEventListener('participantJoined', (pId, pName) => {
+        participantMap.set(pId, { name: pName, isBot: false });
+        log(`👤 参与者加入: ${pName} (${pId})`, 'info');
+        renderParticipants();
+      });
+
+      jitsiAPI.addEventListener('participantLeft', (pId) => {
+        const info = participantMap.get(pId);
+        if (info) log(`👤 参与者离开: ${info.name}`, 'warn');
+        participantMap.delete(pId);
+        if (captureMap.has(pId)) stopCapture(pId);
+        renderParticipants();
+      });
+
+      // === 核心: 监听音轨事件 ===
+      jitsiAPI.addEventListener('trackAdded', (track, pId) => {
+        log(`trackAdded: type=${typeof track}, pId=${pId}`, 'debug');
+
+        // 方式1: track 直接是 MediaStreamTrack
+        if (track instanceof MediaStreamTrack) {
+          handleTrack(track, pId);
+        }
+        // 方式2: track 是 JitsiTrack 对象 (有 getTrack/getType)
+        else if (track && typeof track === 'object') {
+          const mediaTrack = track.getTrack ? track.getTrack() : null;
+          const trackType = track.getType ? track.getType() : (track.type || '');
+          const isLocal = track.isLocal ? track.isLocal() : false;
+          log(`  JitsiTrack: type=${trackType}, isLocal=${isLocal}, mediaTrack=${!!mediaTrack}`, 'debug');
+          if (mediaTrack && !isLocal) {
+            handleTrack(mediaTrack, pId);
+          }
+        }
+        // 方式3: 尝试从 conference 获取
+        if (jitsiAPI.getConference) {
+          tryConferenceTracks(pId);
+        }
+      });
+
+      jitsiAPI.addEventListener('trackRemoved', (track, pId) => {
+        log(`trackRemoved: pId=${pId}`, 'debug');
+        if (captureMap.has(pId)) stopCapture(pId);
+      });
+
+      // 加入成功
+      isBotRunning = true;
+      el('statusBot').textContent = '已加入';
+      el('statusBot').className = 'status-value success';
+      log('✅ Bot 已加入会议，等待参与者...', 'success');
+
+    } catch (e) {
+      log('启动失败: ' + e.message, 'error');
+      console.error(e);
+      el('statusBot').textContent = '失败';
+      el('statusBot').className = 'status-value error';
+      el('startBtn').disabled = false;
+      el('stopBtn').disabled = true;
+    }
+  }
+
+  async function tryConferenceTracks(participantId) {
+    try {
+      const conference = jitsiAPI.getConference();
+      if (!conference) return;
+
+      const tracks = conference.getTracks() || [];
+      for (const jitsiTrack of tracks) {
+        const mediaTrack = jitsiTrack.getTrack ? jitsiTrack.getTrack() : null;
+        const trackType = jitsiTrack.getType ? jitsiTrack.getType() : '';
+        const isLocal = jitsiTrack.isLocal ? jitsiTrack.isLocal() : false;
+        const trackOwner = jitsiTrack.getParticipantId ? jitsiTrack.getParticipantId() : null;
+
+        if (mediaTrack && trackType === 'audio' && !isLocal) {
+          const ownerId = trackOwner || participantId;
+          log(`conference 获取到音轨: owner=${ownerId}`, 'debug');
+          handleTrack(mediaTrack, ownerId);
+        }
       }
+    } catch (e) {
+      log('conference 获取音轨失败: ' + e.message, 'debug');
+    }
+  }
+
+  function handleTrack(track, participantId) {
+    if (track.kind !== 'audio') {
+      log(`忽略非音频轨 (kind=${track.kind})`, 'debug');
+      return;
+    }
+    if (captureMap.has(participantId)) {
+      log(`已在捕获 ${participantId}，跳过重复`, 'debug');
+      return;
     }
 
-    startBtn.addEventListener('click', async () => {
-      if (isRunning) return;
-      isRunning = true;
-      startBtn.disabled = true;
-      stopBtn.disabled = false;
+    const info = participantMap.get(participantId) || { name: '未知参与者', isBot: false };
+    log(`🎤 开始捕获 ${info.name} 的音频轨 (trackId=${track.id})`, 'success');
+    startCapture(track, participantId, info.name);
+  }
 
-      log('正在启动 AI Bot...', 'info');
-      updateStatus('启动中', 'pending');
+  // === 音频捕获管道 ===
+  function startCapture(track, participantId, participantName) {
+    const stream = new MediaStream([track]);
+    const sourceNode = audioContext.createMediaStreamSource(stream);
 
-      try {
-        log('获取 JWT Token...', 'info');
-        const token = await getJwtToken();
-        log('JWT Token 获取成功', 'success');
+    // ScriptProcessor: 4096 buffer, 1 channel
+    const processor = audioContext.createScriptProcessor(4096, 1, 1);
 
-        log('加载 Jitsi 会议...', 'info');
-        iframeContainer.classList.remove('hidden');
-        jitsiFrame.src = `https://192.0.36.227:8443/spike-test?jwt=${token}&displayName=AI%20Assistant&userInfo.displayName=AI%20Assistant`;
+    // 静音输出 (避免 echo)
+    const muteGain = audioContext.createGain();
+    muteGain.gain.value = 0;
 
-        updateStatus('加入会议中', 'pending');
-        
-        setTimeout(() => {
-          updateStatus('已加入', 'success');
-          log('Bot 已加入会议', 'success');
-          
-          audioIndicator.classList.remove('hidden');
-          audioChunks = 0;
-          audioChunksEl.textContent = '0';
-          
-          audioInterval = setInterval(() => {
-            audioChunks++;
-            audioChunksEl.textContent = audioChunks;
-            if (audioChunks % 100 === 0) {
-              log(`已采集 ${audioChunks} 个音频块`, 'info');
-            }
-          }, 100);
-        }, 5000);
+    const chunks = [];
+    const startTime = Date.now();
 
-      } catch (err) {
-        log('启动失败: ' + err.message, 'error');
-        updateStatus('失败', 'error');
-        isRunning = false;
-        startBtn.disabled = false;
-        stopBtn.disabled = true;
-      }
+    processor.onaudioprocess = (e) => {
+      if (!captureMap.has(participantId)) return;
+      const input = e.inputBuffer.getChannelData(0);
+      // Float32 → Int16 PCM
+      const int16 = floatTo16BitPCM(input);
+      chunks.push(int16);
+      totalChunks++;
+      el('statusChunks').textContent = totalChunks;
+    };
+
+    sourceNode.connect(processor);
+    processor.connect(muteGain);
+    muteGain.connect(audioContext.destination);
+
+    captureMap.set(participantId, {
+      name: participantName,
+      track,
+      stream,
+      sourceNode,
+      processor,
+      muteGain,
+      chunks,
+      startTime,
     });
 
-    stopBtn.addEventListener('click', () => {
-      if (!isRunning) return;
-      isRunning = false;
-      startBtn.disabled = false;
-      stopBtn.disabled = true;
-
-      log('正在停止 AI Bot...', 'info');
-      updateStatus('停止中', 'pending');
-
-      if (audioInterval) {
-        clearInterval(audioInterval);
-        audioInterval = null;
-      }
-
-      iframeContainer.classList.add('hidden');
-      audioIndicator.classList.add('hidden');
-      jitsiFrame.src = '';
-
-      updateStatus('已停止', 'pending');
-      log('Bot 已停止', 'success');
+    track.addEventListener('ended', () => {
+      log(`音轨 ended: ${participantName}`, 'warn');
+      if (captureMap.has(participantId)) stopCapture(participantId);
     });
+
+    renderParticipants();
+  }
+
+  function stopCapture(participantId) {
+    const cap = captureMap.get(participantId);
+    if (!cap) return;
+
+    // 断开音频节点
+    try {
+      cap.processor.disconnect();
+      cap.sourceNode.disconnect();
+      cap.muteGain.disconnect();
+      cap.stream.getTracks().forEach(t => t.stop());
+    } catch {}
+
+    // 编码 WAV
+    const audioData = mergeChunks(cap.chunks);
+    const wavBlob = encodeWAV(audioData, audioContext.sampleRate);
+    const url = URL.createObjectURL(wavBlob);
+    const sizeKB = (wavBlob.size / 1024).toFixed(1);
+    const durationSec = ((Date.now() - cap.startTime) / 1000).toFixed(1);
+
+    const fileName = `${cap.name.replace(/\s+/g, '_')}_${Date.now()}.wav`;
+    const downloadUrl = URL.createObjectURL(wavBlob);
+
+    savedWAVs.push({
+      participantId,
+      name: cap.name,
+      url: downloadUrl,
+      sizeKB,
+      durationSec,
+      fileName,
+    });
+
+    log(`💾 ${cap.name} WAV 已保存: ${sizeKB}KB, ${durationSec}秒`, 'success');
+
+    captureMap.delete(participantId);
+    renderParticipants();
+    renderDownloads();
+  }
+
+  // === 停止所有 ===
+  async function stopBot() {
+    isBotRunning = false;
+    log('停止 Bot...', 'info');
+
+    // 停止所有捕获
+    for (const [pId] of captureMap) {
+      stopCapture(pId);
+    }
+
+    // 断开 Jitsi
+    if (jitsiAPI) {
+      try { jitsiAPI.dispose(); } catch {}
+      jitsiAPI = null;
+    }
+
+    if (audioContext) {
+      try { await audioContext.close(); } catch {}
+      audioContext = null;
+    }
+
+    el('statusBot').textContent = '已停止';
+    el('statusBot').className = 'status-value pending';
+    el('startBtn').disabled = false;
+    el('stopBtn').disabled = true;
+    log('Bot 已停止，释放资源完成', 'success');
+    log(`共保存 ${savedWAVs.length} 个 WAV 文件`, 'info');
+  }
+
+  // === PCM 工具函数 ===
+  function floatTo16BitPCM(float32) {
+    const int16 = new Int16Array(float32.length);
+    for (let i = 0; i < float32.length; i++) {
+      const s = Math.max(-1, Math.min(1, float32[i]));
+      int16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+    }
+    return int16;
+  }
+
+  function mergeChunks(chunks) {
+    if (!chunks.length) return new Int16Array(0);
+    const totalLen = chunks.reduce((s, c) => s + c.length, 0);
+    const merged = new Int16Array(totalLen);
+    let offset = 0;
+    for (const c of chunks) {
+      merged.set(c, offset);
+      offset += c.length;
+    }
+    return merged;
+  }
+
+  function encodeWAV(samples, sampleRate) {
+    const buffer = new ArrayBuffer(44 + samples.byteLength);
+    const view = new DataView(buffer);
+
+    const writeStr = (offset, str) => {
+      for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
+    };
+
+    writeStr(0, 'RIFF');
+    view.setUint32(4, 36 + samples.byteLength, true);
+    writeStr(8, 'WAVE');
+    writeStr(12, 'fmt ');
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);
+    view.setUint16(22, 1, true);
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate * 2, true);
+    view.setUint16(32, 2, true);
+    view.setUint16(34, 16, true);
+    writeStr(36, 'data');
+    view.setUint32(40, samples.byteLength, true);
+
+    const bytes = new Uint8Array(buffer, 44);
+    bytes.set(new Uint8Array(samples.buffer, samples.byteOffset, samples.byteLength));
+
+    return new Blob([buffer], { type: 'audio/wav' });
+  }
+
+  // === UI 渲染 ===
+  function renderParticipants() {
+    const list = el('participantList');
+    if (!participantMap.size && !captureMap.size) {
+      list.innerHTML = '<div style="color:#666; font-size:13px; text-align:center; padding:20px;">等待 Bot 加入会议...</div>';
+      el('statusParticipants').textContent = '0';
+      el('statusTracks').textContent = '0';
+      return;
+    }
+
+    el('statusParticipants').textContent = participantMap.size;
+    el('statusTracks').textContent = captureMap.size;
+
+    list.innerHTML = '';
+    for (const [id, info] of participantMap) {
+      const capturing = captureMap.has(id);
+      const div = document.createElement('div');
+      div.className = 'participant-item';
+      div.innerHTML = `
+        <div class="participant-info">
+          <div>
+            <div class="participant-name">${info.name}</div>
+            <div class="participant-id">${id}</div>
+          </div>
+        </div>
+        <div class="participant-status">
+          ${capturing ? `
+            <div class="audio-meter">
+              ${Array(5).fill('<div class="audio-meter-bar" style="height:4px"></div>').join('')}
+            </div>
+            <span style="color:#00ff88">● 录制中</span>
+          ` : '<span style="color:#666">○ 静音/无音轨</span>'}
+        </div>
+      `;
+      list.appendChild(div);
+    }
+
+    // 非参与者但在捕获的 (如 Bot 自己的音轨)
+    for (const [id, cap] of captureMap) {
+      if (!participantMap.has(id)) {
+        const div = document.createElement('div');
+        div.className = 'participant-item';
+        div.innerHTML = `
+          <div class="participant-info">
+            <div>
+              <div class="participant-name">${cap.name}</div>
+              <div class="participant-id">${id}</div>
+            </div>
+          </div>
+          <div class="participant-status">
+            <div class="audio-meter">
+              ${Array(5).fill('<div class="audio-meter-bar" style="height:4px"></div>').join('')}
+            </div>
+            <span style="color:#00ff88">● 录制中</span>
+          </div>
+        `;
+        list.appendChild(div);
+      }
+    }
+  }
+
+  function renderDownloads() {
+    const list = el('downloadList');
+    if (!savedWAVs.length) {
+      list.innerHTML = '<div style="color:#666; font-size:13px; text-align:center; padding:12px;">停止 Bot 后可下载各参与者的 WAV 文件</div>';
+      return;
+    }
+
+    list.innerHTML = '';
+    for (const item of savedWAVs) {
+      const div = document.createElement('div');
+      div.className = 'download-item';
+      div.innerHTML = `
+        <span class="download-name">🎵 ${item.fileName}</span>
+        <span class="download-size">${item.sizeKB} KB · ${item.durationSec}s</span>
+        <a href="${item.url}" download="${item.fileName}">下载</a>
+      `;
+      list.appendChild(div);
+    }
+  }
+
+  // === 按钮事件 ===
+  el('startBtn').addEventListener('click', startBot);
+  el('stopBtn').addEventListener('click', stopBot);
+
+  log('Recorder Bot Spike v1.0 就绪', 'success');
+  log('点击「启动 Bot」开始验证音轨捕获', 'info');
+  log('验证目标: Jitsi Remote Track → PCM16 → WAV', 'debug');
   </script>
 </body>
 </html>

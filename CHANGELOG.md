@@ -2,7 +2,25 @@
 
 本项目的所有重要变更都会记录在此文件中。
 
-## [1.1.1]
+## [1.2.0] - 2026-07-28
+
+### feat（新功能）
+- Recorder Bot Spike: 重写 bot.html，实现 Jitsi 远程音轨捕获验证
+  - 使用 Jitsi IFrame API 加入会议（AI Bot 身份）
+  - 监听 trackAdded/trackRemoved 事件获取远程参与者音轨
+  - 实现 MediaStreamTrack → MediaStream → AudioContext(16kHz) → ScriptProcessor → PCM16 管道
+  - 实现 PCM16 → WAV 编码，按参与者保存下载
+  - 实时 UI：参会者状态、音轨录制状态、音频块计数、WAV 下载列表
+  - 支持 3 种音轨获取方式（MediaStreamTrack 直传、JitsiTrack API、conference 回溯）
+- 新增 `recorder-bot-spike` 验证链路：Jitsi Remote Track → PCM16 → WAV
+
+### fix（修复）
+- 修复 bot.html API 参数名 `room` → `roomId`（与后端 API 对齐）
+
+### refactor（重构）
+- bot.html 从简单 iframe 演示升级为完整的 Spike 验证工具
+
+## [1.1.1] - 2026-07-28
 
 ### fix（修复）
 - 统一端口配置：后端 WebSocket → 8080，Flask API → 8082，前端 → 3000
