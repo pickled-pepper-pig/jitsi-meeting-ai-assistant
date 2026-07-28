@@ -1,14 +1,15 @@
 // 环境配置
-// 开发阶段可通过修改 CURRENT_JITSI 切换 Jitsi 服务
+// 开发阶段通过 Vite 代理转发：
+//   HTTP API (/api, /health) → Flask (127.0.0.1:8082)
+//   WebSocket (/ws) → WebSocket 服务 (127.0.0.1:8080)
 
 const JITSI_PORT = '8443';
+const BACKEND_PORT = '8080';
 
 function getJitsiHost(): string {
   if (typeof window === 'undefined') return 'localhost';
   const hostname = window.location.hostname;
-  if (hostname === 'localhost' || hostname === '127.0.0.1') {
-    return 'localhost';
-  }
+  if (hostname === 'localhost' || hostname === '127.0.0.1') return 'localhost';
   return hostname;
 }
 
@@ -30,10 +31,19 @@ export function getJitsiWebsocketUrl(): string {
 
 export const CURRENT_JITSI = 'local' as 'public' | 'local';
 
+function getBackendBaseUrl(): string {
+  if (typeof window === 'undefined') return 'http://localhost:8082';
+  return ''; // Vite 代理
+}
+
+function getBackendWsUrl(): string {
+  if (typeof window === 'undefined') return 'ws://localhost:8080';
+  // 通过 Vite 代理 /ws → 后端 WebSocket 8080
+  return `${window.location.origin}/ws`;
+}
+
 export const API_CONFIG = {
-  // 使用相对路径，通过 Vite 代理转发，避免浏览器需要信任后端证书
-  baseUrl: typeof window !== 'undefined' ? '' : 'http://localhost:8080',
-  wsUrl: typeof window !== 'undefined'
-    ? `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/ws`
-    : 'ws://localhost:8080/ws',
+  baseUrl: getBackendBaseUrl(),
+  wsUrl: getBackendWsUrl(),
+  backendPort: BACKEND_PORT,
 };

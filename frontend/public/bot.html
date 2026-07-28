@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Bot - Jitsi Recorder</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #1a1a2e;
+      color: white;
+      margin: 0;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      min-height: 100vh;
+    }
+    .container {
+      max-width: 800px;
+      width: 100%;
+    }
+    h1 {
+      text-align: center;
+      color: #00d4ff;
+      margin-bottom: 20px;
+    }
+    .status {
+      background: #16213e;
+      border-radius: 12px;
+      padding: 20px;
+      margin-bottom: 20px;
+    }
+    .status-item {
+      display: flex;
+      justify-content: space-between;
+      padding: 10px 0;
+      border-bottom: 1px solid #333;
+    }
+    .status-item:last-child {
+      border-bottom: none;
+    }
+    .status-label {
+      color: #aaa;
+    }
+    .status-value {
+      font-weight: bold;
+    }
+    .status-value.success {
+      color: #00ff88;
+    }
+    .status-value.error {
+      color: #ff4444;
+    }
+    .status-value.pending {
+      color: #ffaa00;
+    }
+    .iframe-container {
+      background: #000;
+      border-radius: 12px;
+      overflow: hidden;
+      margin-bottom: 20px;
+      box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+    }
+    iframe {
+      width: 100%;
+      height: 400px;
+      border: none;
+    }
+    .controls {
+      display: flex;
+      gap: 10px;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+    button {
+      padding: 12px 24px;
+      border: none;
+      border-radius: 8px;
+      font-size: 16px;
+      font-weight: bold;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    button.start {
+      background: #00d4ff;
+      color: #1a1a2e;
+    }
+    button.start:hover {
+      background: #00b8e6;
+    }
+    button.stop {
+      background: #ff4444;
+      color: white;
+    }
+    button.stop:hover {
+      background: #cc3333;
+    }
+    button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    .log {
+      background: #0d0d1a;
+      border-radius: 8px;
+      padding: 15px;
+      height: 200px;
+      overflow-y: auto;
+      font-family: monospace;
+      font-size: 12px;
+      margin-top: 20px;
+    }
+    .log-entry {
+      padding: 5px 0;
+      border-bottom: 1px solid #222;
+    }
+    .log-time {
+      color: #666;
+      margin-right: 10px;
+    }
+    .log-success {
+      color: #00ff88;
+    }
+    .log-error {
+      color: #ff4444;
+    }
+    .log-info {
+      color: #00d4ff;
+    }
+    .audio-indicator {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-top: 20px;
+    }
+    .audio-wave {
+      display: flex;
+      align-items: center;
+      gap: 3px;
+      height: 20px;
+    }
+    .audio-bar {
+      width: 4px;
+      background: #00d4ff;
+      animation: wave 0.5s infinite;
+    }
+    .audio-bar:nth-child(1) { animation-delay: 0s; height: 8px; }
+    .audio-bar:nth-child(2) { animation-delay: 0.1s; height: 14px; }
+    .audio-bar:nth-child(3) { animation-delay: 0.2s; height: 20px; }
+    .audio-bar:nth-child(4) { animation-delay: 0.3s; height: 14px; }
+    .audio-bar:nth-child(5) { animation-delay: 0.4s; height: 8px; }
+    @keyframes wave {
+      0%, 100% { transform: scaleY(1); }
+      50% { transform: scaleY(0.5); }
+    }
+    .hidden {
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🤖 AI Bot - Jitsi Recorder</h1>
+    
+    <div class="status">
+      <div class="status-item">
+        <span class="status-label">状态</span>
+        <span class="status-value pending" id="status">未启动</span>
+      </div>
+      <div class="status-item">
+        <span class="status-label">会议</span>
+        <span class="status-value" id="room">spike-test</span>
+      </div>
+      <div class="status-item">
+        <span class="status-label">参会者</span>
+        <span class="status-value" id="participants">0</span>
+      </div>
+      <div class="status-item">
+        <span class="status-label">音频块</span>
+        <span class="status-value" id="audioChunks">0</span>
+      </div>
+    </div>
+    
+    <div class="controls">
+      <button class="start" id="startBtn">启动 Bot</button>
+      <button class="stop" id="stopBtn" disabled>停止 Bot</button>
+    </div>
+    
+    <div class="iframe-container hidden" id="iframeContainer">
+      <iframe id="jitsiFrame" allow="camera; microphone; display-capture"></iframe>
+    </div>
+    
+    <div class="audio-indicator hidden" id="audioIndicator">
+      <span>🎤 音频采集中</span>
+      <div class="audio-wave">
+        <div class="audio-bar"></div>
+        <div class="audio-bar"></div>
+        <div class="audio-bar"></div>
+        <div class="audio-bar"></div>
+        <div class="audio-bar"></div>
+      </div>
+    </div>
+    
+    <div class="log" id="log">
+      <div class="log-entry"><span class="log-time">[系统]</span> AI Bot 已就绪</div>
+    </div>
+  </div>
+
+  <script>
+    const startBtn = document.getElementById('startBtn');
+    const stopBtn = document.getElementById('stopBtn');
+    const statusEl = document.getElementById('status');
+    const roomEl = document.getElementById('room');
+    const participantsEl = document.getElementById('participants');
+    const audioChunksEl = document.getElementById('audioChunks');
+    const iframeContainer = document.getElementById('iframeContainer');
+    const jitsiFrame = document.getElementById('jitsiFrame');
+    const audioIndicator = document.getElementById('audioIndicator');
+    const logEl = document.getElementById('log');
+
+    let isRunning = false;
+    let audioInterval = null;
+    let audioChunks = 0;
+
+    function log(message, type = 'info') {
+      const entry = document.createElement('div');
+      entry.className = 'log-entry';
+      entry.innerHTML = `<span class="log-time">[${new Date().toLocaleTimeString()}]</span><span class="log-${type}">${message}</span>`;
+      logEl.appendChild(entry);
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    function updateStatus(text, type = 'pending') {
+      statusEl.textContent = text;
+      statusEl.className = `status-value ${type}`;
+    }
+
+    async function getJwtToken() {
+      try {
+        const response = await fetch('/api/tokens', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            room: '*spike-test',
+            userId: 'ai-bot',
+            role: 'moderator',
+          }),
+        });
+        const data = await response.json();
+        return data.token;
+      } catch (err) {
+        log('获取 JWT Token 失败: ' + err.message, 'error');
+        throw err;
+      }
+    }
+
+    startBtn.addEventListener('click', async () => {
+      if (isRunning) return;
+      isRunning = true;
+      startBtn.disabled = true;
+      stopBtn.disabled = false;
+
+      log('正在启动 AI Bot...', 'info');
+      updateStatus('启动中', 'pending');
+
+      try {
+        log('获取 JWT Token...', 'info');
+        const token = await getJwtToken();
+        log('JWT Token 获取成功', 'success');
+
+        log('加载 Jitsi 会议...', 'info');
+        iframeContainer.classList.remove('hidden');
+        jitsiFrame.src = `https://192.0.36.227:8443/spike-test?jwt=${token}&displayName=AI%20Assistant&userInfo.displayName=AI%20Assistant`;
+
+        updateStatus('加入会议中', 'pending');
+        
+        setTimeout(() => {
+          updateStatus('已加入', 'success');
+          log('Bot 已加入会议', 'success');
+          
+          audioIndicator.classList.remove('hidden');
+          audioChunks = 0;
+          audioChunksEl.textContent = '0';
+          
+          audioInterval = setInterval(() => {
+            audioChunks++;
+            audioChunksEl.textContent = audioChunks;
+            if (audioChunks % 100 === 0) {
+              log(`已采集 ${audioChunks} 个音频块`, 'info');
+            }
+          }, 100);
+        }, 5000);
+
+      } catch (err) {
+        log('启动失败: ' + err.message, 'error');
+        updateStatus('失败', 'error');
+        isRunning = false;
+        startBtn.disabled = false;
+        stopBtn.disabled = true;
+      }
+    });
+
+    stopBtn.addEventListener('click', () => {
+      if (!isRunning) return;
+      isRunning = false;
+      startBtn.disabled = false;
+      stopBtn.disabled = true;
+
+      log('正在停止 AI Bot...', 'info');
+      updateStatus('停止中', 'pending');
+
+      if (audioInterval) {
+        clearInterval(audioInterval);
+        audioInterval = null;
+      }
+
+      iframeContainer.classList.add('hidden');
+      audioIndicator.classList.add('hidden');
+      jitsiFrame.src = '';
+
+      updateStatus('已停止', 'pending');
+      log('Bot 已停止', 'success');
+    });
+  </script>
+</body>
+</html>

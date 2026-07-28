@@ -7,36 +7,37 @@ import { useWebSocket } from './hooks/useWebSocket';
 import { MessageBuffer } from './utils/messageBuffer';
 import { ChatMessage, ServerMessage } from './types';
 import { getJitsiDomain, getJitsiProtocol, API_CONFIG } from './config';
+import { AudioCaptureService } from './services/audioCapture';
+import { AudioCaptureState } from './services/audioTypes';
 import './App.css';
 
 const JITSI_DOMAIN = getJitsiDomain();
 const JITSI_PROTOCOL = getJitsiProtocol();
 
 export default function App() {
-  // 从 URL 参数获取默认值
   const getUrlParam = (name: string) => {
     if (typeof window === 'undefined') return '';
     const params = new URLSearchParams(window.location.search);
     return params.get(name) || '';
   };
 
-  // 配置状态
   const [roomName, setRoomName] = useState(getUrlParam('room'));
   const [displayName, setDisplayName] = useState(getUrlParam('name'));
   const [isModerator, setIsModerator] = useState(true);
   const [joined, setJoined] = useState(false);
   const [aiEnabled, setAiEnabled] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [showProxyWarning, setShowProxyWarning] = useState(false);
+  const [botStatus, setBotStatus] = useState<'idle' | 'starting' | 'started'>('idle');
+  const [audioState, setAudioState] = useState<AudioCaptureState | null>(null);
 
-  // Token 和用户信息
   const tokenRef = useRef<string>('');
   const userIdRef = useRef<string>('');
+  const audioServiceRef = useRef<AudioCaptureService | null>(null);
 
-  // 消息缓冲
   const messageBufferRef = useRef(new MessageBuffer());
   const [messages, setMessages] = useState<ChatMessage[]>([]);
 
-  // 加入会议后更新 URL
   useEffect(() => {
     if (joined && roomName) {
       const url = new URL(window.location.href);
@@ -45,25 +46,41 @@ export default function App() {
     }
   }, [joined, roomName]);
 
-  // 复制邀请链接
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const hostname = window.location.hostname;
+    if (hostname === 'localhost' || hostname === '127.0.0.1') return;
+
+    const abortController = new AbortController();
+    const timeoutId = setTimeout(() => abortController.abort(), 3000);
+
+    fetch('/health', { signal: abortController.signal })
+      .then((res) => {
+        if (!res.ok) throw new Error('Health check failed');
+      })
+      .catch(() => {
+        setShowProxyWarning(true);
+      })
+      .finally(() => {
+        clearTimeout(timeoutId);
+      });
+  }, []);
+
   const copyInviteLink = useCallback(() => {
     if (typeof window === 'undefined') return;
     const url = new URL(window.location.href);
     url.searchParams.set('room', roomName);
     url.searchParams.delete('name');
-    const inviteUrl = url.toString();
-    navigator.clipboard.writeText(inviteUrl).then(() => {
+    navigator.clipboard.writeText(url.toString()).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     });
   }, [roomName]);
 
-  // 刷新消息列表
   const refreshMessages = useCallback(() => {
     setMessages(messageBufferRef.current.getAll());
   }, []);
 
-  // WebSocket 消息处理
   const handleWsMessage = useCallback((message: ServerMessage) => {
     switch (message.type) {
       case 'joined':
@@ -80,34 +97,29 @@ export default function App() {
         console.log(`[App] 同步完成，补齐 ${message.messages.length} 条消息`);
         break;
       case 'summary':
-        // 总结已通过 chat 类型消息广播
         break;
       case 'error':
-        console.warn('[App] 服务端错误:', message.message);
-        // 简单提示
-        alert(message.message);
+        console.warn('[App] 服务端提示:', message.message);
         break;
     }
   }, [refreshMessages]);
 
-  // WebSocket 连接
   const { connect, send, status } = useWebSocket({
     url: API_CONFIG.wsUrl,
     onMessage: handleWsMessage,
   });
 
-  // 获取开发 Token
   const fetchDevToken = async (roomId: string, userId: string, moderator: boolean) => {
     const res = await fetch(`${API_CONFIG.baseUrl}/api/dev/tokens`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ roomId, userId }),
     });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const tokens = await res.json();
     return moderator ? tokens.moderator : tokens.participant;
   };
 
-  // 加入会议
   const handleJoin = async () => {
     if (!roomName.trim() || !displayName.trim()) {
       alert('请填写房间名和用户名');
@@ -117,20 +129,18 @@ export default function App() {
     const userId = `user-${Date.now()}`;
     userIdRef.current = userId;
 
-    // Phase 1: 从后端获取 Mock Token
-    const token = await fetchDevToken(roomName.trim(), userId, isModerator);
-    tokenRef.current = token;
-
-    setAiEnabled(true);
-    setJoined(true);
-
-    // 建立 WebSocket 连接
-    connect(roomName.trim(), token);
+    try {
+      const token = await fetchDevToken(roomName.trim(), userId, isModerator);
+      tokenRef.current = token;
+      setAiEnabled(true);
+      setJoined(true);
+      connect(roomName.trim(), token);
+    } catch {
+      setShowProxyWarning(true);
+    }
   };
 
-  // Jitsi 聊天消息回调
   const handleIncomingMessage = useCallback((sender: string, message: string, _timestamp: string) => {
-    // 将 Jitsi 聊天消息发送到后端广播
     send({
       action: 'chat',
       roomId: roomName,
@@ -150,7 +160,6 @@ export default function App() {
     });
   }, [send, roomName, displayName]);
 
-  // 会议结束自动总结
   const handleVideoConferenceLeft = useCallback(() => {
     console.log('[App] 会议结束，自动触发总结');
     if (isModerator && tokenRef.current) {
@@ -163,7 +172,6 @@ export default function App() {
     setJoined(false);
   }, [send, roomName, isModerator]);
 
-  // 手动总结
   const handleSummarize = useCallback(() => {
     send({
       action: 'summarize',
@@ -172,22 +180,73 @@ export default function App() {
     });
   }, [send, roomName]);
 
-  // 离开会议
-  const handleLeave = () => {
+  const handleLeave = async () => {
+    if (audioServiceRef.current) {
+      await audioServiceRef.current.stop();
+      audioServiceRef.current = null;
+    }
     send({ action: 'leave', roomId: roomName });
     setJoined(false);
     setAiEnabled(false);
+    setBotStatus('idle');
+    setAudioState(null);
     messageBufferRef.current.clear();
     setMessages([]);
   };
 
-  // 入口界面
+  const handleStartBot = async () => {
+    if (botStatus !== 'idle') return;
+    setBotStatus('starting');
+
+    try {
+      // 通过 Vite 代理 /ws → 后端 WebSocket 8080
+      const wsUrl = `${window.location.origin}/ws`;
+
+      const audioService = new AudioCaptureService({
+        roomId: roomName,
+        participantId: userIdRef.current,
+        participantName: displayName,
+        wsUrl,
+      });
+
+      audioServiceRef.current = audioService;
+      audioService.subscribe((state) => setAudioState(state));
+      await audioService.start();
+      setBotStatus('started');
+      console.log('[App] AI Bot 已启动，音频采集中...');
+    } catch (err) {
+      console.error('[App] AI Bot 启动失败:', err);
+      setBotStatus('idle');
+    }
+  };
+
   if (!joined) {
     return (
       <div className="join-page">
+        {showProxyWarning && (
+          <div className="proxy-warning-overlay">
+            <div className="proxy-warning-modal">
+              <div className="proxy-warning-icon">⚠️</div>
+              <h3>检测到代理/VPN</h3>
+              <p>当前网络环境可能使用了代理或VPN，这会导致无法正常访问会议服务。</p>
+              <div className="proxy-warning-steps">
+                <h4>请按以下步骤操作：</h4>
+                <ol>
+                  <li>打开「系统设置」→「网络」→「Wi-Fi」→「详细信息」</li>
+                  <li>点击「代理」标签页</li>
+                  <li>取消勾选「Web 代理 (HTTP)」和「安全 Web 代理 (HTTPS)」</li>
+                  <li>或在「绕过代理服务器的主机与域名」中添加当前 IP 地址</li>
+                </ol>
+              </div>
+              <button className="proxy-warning-btn" onClick={() => setShowProxyWarning(false)}>
+                我已关闭代理
+              </button>
+            </div>
+          </div>
+        )}
         <div className="join-card">
           <h1>会议 AI 助手</h1>
-          <p className="subtitle">Phase 1 - 实时聊天展示 + 会议总结</p>
+          <p className="subtitle">实时 ASR 转写 + 聊天展示 + 会议总结</p>
 
           <div className="form-group">
             <label>房间名</label>
@@ -227,10 +286,12 @@ export default function App() {
           <div className="tips">
             <p>使用说明：</p>
             <ul>
-              <li>使用公共 Jitsi 服务（meet.jit.si）</li>
+              <li>使用本地 Jitsi 服务（自部署）</li>
+              <li>后端统一服务：ASR 转写 + 会议管理（Python，端口 8080）</li>
               <li>主持人可点击「总结会议」生成纪要</li>
               <li>会议结束后自动触发总结</li>
-              <li>WebSocket 断线自动重连 + 消息补齐</li>
+              <li>Socket.IO 断线自动重连 + 消息补齐</li>
+              <li>如无法访问，请关闭代理或VPN后重试</li>
             </ul>
           </div>
         </div>
@@ -238,7 +299,6 @@ export default function App() {
     );
   }
 
-  // 会议界面
   return (
     <div className="app-container">
       <div className="meeting-area">
@@ -261,6 +321,9 @@ export default function App() {
         aiEnabled={aiEnabled}
         onCopyInvite={copyInviteLink}
         inviteCopied={copied}
+        onStartBot={handleStartBot}
+        botStatus={botStatus}
+        audioState={audioState}
       />
       <button className="leave-btn" onClick={handleLeave}>
         离开会议

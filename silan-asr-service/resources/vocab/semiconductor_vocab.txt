@@ -1,0 +1,84 @@
+# 半导体行业术语纠正词库
+# 格式：错误写法=正确写法
+
+# 公司名称
+英飞凌=英飞凌
+安森美=安森美
+意法半导体=意法半导体
+德州仪器=德州仪器
+三菱电机=三菱电机
+富士电机=富士电机
+东芝=东芝
+罗姆半导体=罗姆半导体
+恩智浦=恩智浦
+Wolfspeed=Wolfspeed
+士兰微=士兰微
+
+# 功率半导体器件
+MOSFET=MOSFET
+IGBT=IGBT
+SiC MOSFET=SiC MOSFET
+GaN HEMT=GaN HEMT
+功率模块=功率模块
+电源管理IC=电源管理IC
+PMIC=PMIC
+
+# 材料
+SiC=SiC
+GaN=GaN
+碳化硅=碳化硅
+氮化镓=氮化镓
+宽禁带=宽禁带
+
+# 制造工艺
+光刻=光刻
+蚀刻=蚀刻
+沉积=沉积
+掺杂=掺杂
+抛光=抛光
+晶圆=晶圆
+封装=封装
+测试=测试
+
+# 技术术语
+Fab=Fab
+EDA=EDA
+IP核=IP核
+纳米=纳米
+制程=制程
+良率=良率
+晶圆厂=晶圆厂
+
+# 设备
+光刻机=光刻机
+刻蚀机=刻蚀机
+CMP设备=CMP设备
+
+# 封装技术
+TSV=TSV
+SiP=SiP
+CoWoS=CoWoS
+
+# 测试技术
+ATE=ATE
+
+# 特殊纠错
+HBM三E=HBM3E
+HBM 3E=HBM3E
+HBM3 E=HBM3E
+co boss=CoWoS
+Co Boss=CoWoS
+co bos=CoWoS
+CoBos=CoWoS
+
+# 先进封装
+先进封装=先进封装
+Chiplet=Chiplet
+EUV=EUV
+FinFET=FinFET
+GAA=GAA
+RISC-V=RISC-V
+PCIe=PCIe
+DDR=DDR
+SRAM=SRAM
+DRAM=DRAM

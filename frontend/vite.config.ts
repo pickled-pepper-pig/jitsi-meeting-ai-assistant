@@ -2,31 +2,48 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import fs from 'fs'
 import path from 'path'
+import { fileURLToPath, URL } from 'node:url'
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const keyPath = path.join(__dirname, 'localhost+3-key.pem')
 const certPath = path.join(__dirname, 'localhost+3.pem')
 const useSsl = fs.existsSync(keyPath) && fs.existsSync(certPath)
 
+// Flask HTTP API (后台线程，端口 8082，避免与 Jitsi JVB 8081 冲突)
+const FLASK_TARGET = 'http://127.0.0.1:8082'
+// WebSocket 服务 (主线程，端口 8080)
+const WS_TARGET = 'http://127.0.0.1:8080'
+
 export default defineConfig({
   plugins: [react()],
   server: {
-    host: '0.0.0.0',
+    host: true,
     port: 3000,
+    strictPort: false,
     https: useSsl ? {
       key: fs.readFileSync(keyPath),
       cert: fs.readFileSync(certPath),
     } : undefined,
     proxy: {
+      // HTTP API → Flask (8082)
       '/api': {
-        target: 'http://localhost:8080',
+        target: FLASK_TARGET,
         changeOrigin: true,
         secure: false,
       },
+      '/health': {
+        target: FLASK_TARGET,
+        changeOrigin: true,
+        secure: false,
+      },
+      // WebSocket 升级 → WebSocket 服务 (8080)
+      // 原生 WebSocket 连接会走这个代理
       '/ws': {
-        target: 'http://localhost:8080',
+        target: WS_TARGET,
         changeOrigin: true,
         ws: true,
         secure: false,
+        rewrite: (path) => path.replace(/^\/ws/, ''),
       },
     },
   },

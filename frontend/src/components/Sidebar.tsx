@@ -1,6 +1,7 @@
 // 侧边栏组件 - 集成消息列表、总结按钮、合规提示
 
 import { ChatMessage, ConnectionStatus } from '../types';
+import { AudioCaptureState } from '../services/audioTypes';
 import { MessageList } from './MessageList';
 import { SummaryButton } from './SummaryButton';
 import { ComplianceNotice } from './ComplianceNotice';
@@ -13,6 +14,9 @@ interface SidebarProps {
   aiEnabled: boolean;
   onCopyInvite?: () => void;
   inviteCopied?: boolean;
+  onStartBot?: () => void;
+  botStatus?: 'idle' | 'starting' | 'started';
+  audioState?: AudioCaptureState | null;
 }
 
 export function Sidebar({
@@ -23,6 +27,9 @@ export function Sidebar({
   aiEnabled,
   onCopyInvite,
   inviteCopied,
+  onStartBot,
+  botStatus = 'idle',
+  audioState,
 }: SidebarProps) {
   const statusText: Record<ConnectionStatus, string> = {
     connected: '已连接',
@@ -59,6 +66,38 @@ export function Sidebar({
           </button>
         </div>
       )}
+
+      <div className="bot-section">
+        <button 
+          className={`bot-btn ${botStatus === 'started' ? 'bot-active' : ''}`}
+          onClick={onStartBot}
+          disabled={botStatus === 'starting' || botStatus === 'started'}
+        >
+          {botStatus === 'idle' && '🎙️ 开启 AI 语音识别'}
+          {botStatus === 'starting' && '⏳ 连接中...'}
+          {botStatus === 'started' && '🎤 正在录制中'}
+        </button>
+        {audioState && audioState.status === 'recording' && (
+          <div className="audio-status">
+            <div className="audio-status-item">
+              <span className="audio-status-label">参会者:</span>
+              <span className="audio-status-value">{audioState.participants.length} 人</span>
+            </div>
+            <div className="audio-status-item">
+              <span className="audio-status-label">音频块:</span>
+              <span className="audio-status-value">{audioState.audioChunks}</span>
+            </div>
+            <div className="audio-wave-indicator">
+              <div className="audio-bar"></div>
+              <div className="audio-bar"></div>
+              <div className="audio-bar"></div>
+              <div className="audio-bar"></div>
+              <div className="audio-bar"></div>
+            </div>
+          </div>
+        )}
+        <p className="bot-tip">点击后开始采集音频并发送给 ASR 服务</p>
+      </div>
 
       <MessageList messages={messages} />
 

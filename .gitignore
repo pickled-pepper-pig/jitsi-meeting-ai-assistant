@@ -1,3 +1,11 @@
+# === Python 忽略 ===
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.venv/
+venv/
+
 # === 通用忽略 ===
 node_modules/
 *.log
@@ -38,3 +46,8 @@ temp/
 
 # === RSA 密钥 ===
 backend/keys/
+
+# === ASR 服务数据 ===
+silan-asr-service/recordings/
+silan-asr-service/logs/
+silan-asr-service/.cache/
