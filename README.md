@@ -8,11 +8,12 @@
 
 - **实时聊天**：捕获并同步 Jitsi 会议聊天消息
 - **会议总结**：主持人一键生成会议纪要
-- **ASR 转写**：FunASR Paraformer 流式语音识别
+- **ASR 流式转写**：FunASR Paraformer 流式识别，跨句累积不切碎、自动加标点
 - **断线重连**：WebSocket 自动重连 + 消息补齐
-- **角色权限**：主持人/参会者区分
+- **角色权限**：主持人/参会者区分，一房一主持人
+- **房间级 AI 广播**：主持人开启 AI 后，房间内所有人实时看到转写内容
 - **AI Gateway**：会议生命周期管理、权限校验、Bot 管理
-- **JWT 认证**：RS256 非对称签名，支持 Jitsi 集成
+- **JWT 认证**：HS256 共享密钥，支持 Jitsi XMPP affiliation
 - **Redis 状态**：会议状态持久化，支持内存降级
 - **本地部署**：Docker 一键部署 Jitsi
 
@@ -23,10 +24,10 @@
 | 层级 | 技术 | 版本 |
 |------|------|------|
 | 前端 | React + Vite | 18.2 / 5.0 |
-| 后端 | Python (websockets + Flask) | 3.x |
+| 后端 | Python (websockets + Flask-SocketIO) | 3.x |
 | ASR | FunASR Paraformer (流式) | 1.3.30 |
-| 通信 | 原生 WebSocket | websockets |
-| 认证 | JWT (RS256) | PyJWT |
+| 通信 | 原生 WebSocket + Socket.IO | websockets / flask-socketio |
+| 认证 | JWT (HS256) | PyJWT |
 | 缓存 | Redis | redis-py |
 | 视频 | Jitsi Meet (Docker) | - |
 | 语言 | TypeScript (前端) / Python (后端) | 5.3 / 3.x |
@@ -54,6 +55,7 @@ silan-jitsi/
 │   │   └── config/            # 配置管理
 │   ├── resources/vocab/        # 行业热词库
 │   ├── tests/                  # 测试
+│   ├── test_client/            # ASR 测试工具（TTS 生成 / 流式回放 / CER 评估）
 │   ├── main.py                 # 服务入口
 │   └── requirements.txt        # Python 依赖
 ├── frontend/
@@ -65,6 +67,7 @@ silan-jitsi/
 │   ├── public/bot.html         # Bot 加入页
 │   └── package.json
 ├── jitsi/                      # Jitsi Docker 部署
+├── DOCS.md                     # 技术架构文档
 ├── README.md
 ├── CHANGELOG.md
 └── .gitignore
@@ -150,10 +153,10 @@ export const CURRENT_JITSI = 'local'; // 'public' | 'local'
 
 ### JWT 配置
 
-后端使用 RS256 非对称签名：
-- 私钥：`silan-asr-service/keys/private.pem`
-- 公钥：`silan-asr-service/keys/public.pem`
-- 环境变量：`JWT_ISSUER`、`JWT_EXPIRES_IN`
+后端使用 HS256 共享密钥（与 Jitsi Prosody 共享）：
+- 环境变量：`JWT_SHARED_SECRET`、`JWT_ALGORITHM=HS256`
+- 与 Prosody 的 `JWT_APP_ID` / `JWT_APP_SECRET` 完全一致
+- JWT payload 含 `role`（moderator/participant）+ `affiliation`（owner/member）
 
 ### Redis 配置
 
@@ -257,9 +260,10 @@ GET http://localhost:8082/api/audit-logs?roomId=room-a
 
 ## 🔗 WebSocket 事件
 
-前端通过原生 WebSocket 与后端通信（开发时通过 Vite 代理 `/ws` → `ws://localhost:8080`）：
+前端通过原生 WebSocket 与后端通信（开发时通过 Vite 代理 `/ws` → `ws://localhost:8080`）。
+同时通过 Socket.IO 订阅房间级广播事件（开发时 Vite 代理 `/socket.io` → `http://localhost:8082`）。
 
-### 会议信令
+### 会议信令（原 WebSocket）
 
 | 客户端事件 | 说明 |
 |-----------|------|
@@ -291,6 +295,17 @@ GET http://localhost:8082/api/audit-logs?roomId=room-a
 | `session_created` | 会话创建成功 |
 | `transcript` | 转写结果（interim + final） |
 | `error` | 错误提示 |
+
+### 房间广播（Socket.IO）
+
+| 事件 | 说明 |
+|------|------|
+| `meeting_join` | 加入房间（需 token），返回 `meeting_joined` + `ai_bot_status` 补发 |
+| `meeting_chat` | 房间内聊天广播 |
+| `meeting_summarize` | 主持人触发总结 |
+| `meeting_sync` | 断线补齐 |
+| `ai_bot_status` | 房间 AI Bot 状态变化（任意人开启/关闭） |
+| `meeting_transcript` | 主持人产生的 final 转写（旁观者实时接收） |
 
 ---
 
@@ -343,12 +358,15 @@ MIT License
 
 ## 📌 待办
 
-- [x] JWT 认证（RS256）
+- [x] JWT 认证（HS256 共享密钥）
 - [x] AI Gateway 模块
 - [x] Redis Meeting State
 - [x] 后端迁移至 Python 统一服务 (silan-asr-service)
 - [x] 前后端统一为原生 WebSocket 协议
 - [x] Recorder Bot Spike 验证（lib-jitsi-meet 远程音轨捕获）
 - [x] ASR 服务模型修复（funasr 1.3.30 + paraformer-zh-streaming）
-- [ ] Streaming ASR 实时转写（集成 FunASR）
+- [x] Streaming ASR 实时转写（FunASR 流式 + 跨句累积 + 自动加标点）
+- [x] 房间级 AI 状态广播（Socket.IO 跨通道）
+- [x] 一房一主持人鉴权（先到先得）
+- [ ] LLM 接入真实大模型（目前为 Mock）
 - [ ] 对象存储集成
