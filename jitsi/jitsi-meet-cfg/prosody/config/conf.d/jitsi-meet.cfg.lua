@@ -28,7 +28,11 @@ http_default_host = "meet.jitsi"
 
 
 
+asap_accepted_issuers = { "meeting-ai" }
 
+
+
+asap_accepted_audiences = { "jitsi" }
 
 
 consider_bosh_secure = true;
@@ -44,7 +48,14 @@ smacks_max_old_sessions = 1;
 
 VirtualHost "meet.jitsi"
 
-    authentication = "jitsi-anonymous"
+  
+  authentication = "token"
+    app_id = "meeting-ai"
+    app_secret = "silan-jitsi-dev-shared-secret-2025-change-in-production"
+    allow_empty_token = false
+    
+    enable_domain_verification = false
+  
 
     ssl = {
         key = "/config/certs/meet.jitsi.key";
@@ -102,6 +113,18 @@ VirtualHost "meet.jitsi"
     
 
     
+VirtualHost "guest.meet.jitsi"
+    authentication = "jitsi-anonymous"
+    modules_enabled = {
+        
+        "smacks"; -- XEP-0198: Stream Management
+        
+    }
+
+    c2s_require_encryption = true
+    
+
+
 
 VirtualHost "auth.meet.jitsi"
     ssl = {
@@ -132,6 +155,7 @@ Component "muc.meet.jitsi" "muc"
     storage = "memory"
     modules_enabled = {
         "muc_meeting_id";
+        "token_verification";
         
         "polls";
         "muc_domain_mapper";
