@@ -1,7 +1,8 @@
-# JWT 认证模块 - RS256 非对称签名
+# JWT 认证模块 - 支持 HS256（共享密钥）和 RS256（非对称签名）
 
 import jwt
 import logging
+import os
 from pathlib import Path
 from typing import Optional, Dict, Any
 
@@ -14,6 +15,10 @@ PUBLIC_KEY_PATH = PROJECT_ROOT / "keys" / "public.pem"
 JWT_ISSUER = "meeting-ai"
 JWT_AUDIENCE = "jitsi"
 
+# 从环境变量读取算法，默认 HS256
+JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
+JWT_SHARED_SECRET = os.getenv("JWT_SHARED_SECRET", "")
+
 _private_key: Optional[str] = None
 _public_key: Optional[str] = None
 
@@ -23,30 +28,52 @@ def _load_keys() -> None:
     try:
         _private_key = PRIVATE_KEY_PATH.read_text(encoding="utf-8")
         _public_key = PUBLIC_KEY_PATH.read_text(encoding="utf-8")
-        logger.info("JWT keys loaded from files")
+        logger.info("JWT RSA keys loaded from files")
     except FileNotFoundError:
         logger.warning("密钥文件未找到，将使用环境变量中的密钥")
-        import os
         _private_key = os.getenv("JWT_PRIVATE_KEY", "")
         _public_key = os.getenv("JWT_PUBLIC_KEY", "")
 
 
-# 启动时加载密钥
+# 启动时加载 RSA 密钥（用于 RS256）
 _load_keys()
+
+logger.info(f"JWT 认证算法: {JWT_ALGORITHM}")
+
+
+def _get_sign_key() -> str:
+    """获取签名密钥"""
+    if JWT_ALGORITHM == "HS256":
+        return JWT_SHARED_SECRET
+    return _private_key
+
+
+def _get_verify_key() -> str:
+    """获取验证密钥"""
+    if JWT_ALGORITHM == "HS256":
+        return JWT_SHARED_SECRET
+    return _public_key
 
 
 def sign_token(payload: Dict[str, Any]) -> str:
     """签发 JWT Token"""
-    return jwt.encode(payload, _private_key, algorithm="RS256")
+    key = _get_sign_key()
+    if not key:
+        raise ValueError("JWT signing key not configured")
+    return jwt.encode(payload, key, algorithm=JWT_ALGORITHM)
 
 
 def verify_token(token: str) -> Optional[Dict[str, Any]]:
     """验证 JWT Token，返回 payload 或 None"""
     try:
+        key = _get_verify_key()
+        if not key:
+            logger.error("JWT verification key not configured")
+            return None
         decoded = jwt.decode(
             token,
-            _public_key,
-            algorithms=["RS256"],
+            key,
+            algorithms=[JWT_ALGORITHM],
             issuer=JWT_ISSUER,
             audience=JWT_AUDIENCE,
         )

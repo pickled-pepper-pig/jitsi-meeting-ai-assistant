@@ -89,7 +89,7 @@ silan-jitsi/
 
 ```bash
 cd jitsi
-docker compose up -d
+CONFIG=./jitsi-meet-cfg docker compose up -d
 # Jitsi 运行在 https://localhost:8443
 ```
 

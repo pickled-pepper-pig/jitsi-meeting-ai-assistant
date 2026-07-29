@@ -15,7 +15,9 @@ class AudioSessionManager:
         self.sessions: Dict[str, AudioSession] = {}
         self.worker_sessions: Dict[str, List[str]] = {}
         self.client_sessions: Dict[str, List[str]] = {}
-        self.lock = threading.Lock()
+        # 必须是可重入锁：部分方法（如清理逻辑）会调用其他同样加锁的方法，
+        # 使用普通 Lock 会导致同一线程二次获取时永久自死锁，进而拖死整个网关。
+        self.lock = threading.RLock()
         self._start_cleanup_thread()
     
     def create_session(self, session_id: str, meeting_id: str, 
@@ -90,16 +92,20 @@ class AudioSessionManager:
             session = self.sessions.get(session_id)
             if not session:
                 return False
-            
+
+            if session.status == SessionStatus.CLOSED:
+                return True
+
             session.mark_closed()
-            
+
             if session.worker_id and session.worker_id in self.worker_sessions:
-                self.worker_sessions[session.worker_id].remove(session_id)
-            
+                if session_id in self.worker_sessions[session.worker_id]:
+                    self.worker_sessions[session.worker_id].remove(session_id)
+
             if session.client_id and session.client_id in self.client_sessions:
                 if session_id in self.client_sessions[session.client_id]:
                     self.client_sessions[session.client_id].remove(session_id)
-            
+
             logger.info(f"Session {session_id} closed")
             return True
     
@@ -155,18 +161,34 @@ class AudioSessionManager:
         def cleanup():
             while True:
                 time.sleep(60)
-                self._cleanup_timeout_sessions()
-        
-        thread = threading.Thread(target=cleanup, daemon=True)
+                try:
+                    self._cleanup_timeout_sessions()
+                except Exception as e:
+                    logger.error(f"Session cleanup error: {e}", exc_info=True)
+
+        thread = threading.Thread(target=cleanup, daemon=True, name="session-cleanup")
         thread.start()
-    
+
     def _cleanup_timeout_sessions(self) -> None:
+        # 锁内只做「收集」，关闭与移除放到锁外执行，避免嵌套加锁
         with self.lock:
-            timeout_sessions = [
-                session_id for session_id, session in self.sessions.items()
-                if session.is_timeout(self.config.session_timeout_sec)
-            ]
-            
-            for session_id in timeout_sessions:
-                logger.warning(f"Cleaning up timeout session: {session_id}")
-                self.close_session(session_id)
+            timeout_ids: List[str] = []
+            purge_ids: List[str] = []
+            for session_id, session in self.sessions.items():
+                if not session.is_timeout(self.config.session_timeout_sec):
+                    continue
+                if session.status == SessionStatus.CLOSED:
+                    purge_ids.append(session_id)
+                else:
+                    timeout_ids.append(session_id)
+
+        for session_id in timeout_ids:
+            logger.warning(f"Cleaning up timeout session: {session_id}")
+            self.close_session(session_id)
+
+        # 已关闭且超时的 session 彻底移除，避免 sessions 表无限增长
+        if purge_ids:
+            with self.lock:
+                for session_id in purge_ids:
+                    self.sessions.pop(session_id, None)
+            logger.info(f"Purged {len(purge_ids)} closed sessions")

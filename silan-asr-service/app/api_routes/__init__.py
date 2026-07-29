@@ -1,6 +1,7 @@
 # HTTP API 路由 - tokens / meetings / participants / audio sessions
 
 import logging
+import time
 from flask import Blueprint, request, jsonify
 
 from app.auth import (
@@ -29,7 +30,16 @@ api_bp = Blueprint("api", __name__)
 
 @api_bp.route("/health")
 def health():
-    return jsonify({"status": "ok", "timestamp": __import__("time").time()})
+    """健康检查：同时反映 WebSocket 事件循环是否存活（被同步代码卡死时返回 degraded）"""
+    from app.audio_gateway.ws_server import get_loop_lag_ms
+
+    lag_ms = get_loop_lag_ms()
+    healthy = 0 <= lag_ms < 5000
+    return jsonify({
+        "status": "ok" if healthy else "degraded",
+        "wsLoopLagMs": round(lag_ms, 1),
+        "timestamp": time.time(),
+    }), (200 if healthy else 503)
 
 
 # ---------------------------------------------------------------------------

@@ -35,7 +35,10 @@ REDIS_TTL = 24 * 60 * 60  # 24h
 # 内存存储
 # ---------------------------------------------------------------------------
 _meetings: Dict[str, Dict[str, Any]] = {}
-_lock = threading.Lock()
+# 必须是可重入锁：enable_ai / add_message / add_participant 等函数在持锁状态下
+# 会再次调用 get_or_create_meeting()。若用普通 Lock，同一线程二次获取即永久死锁，
+# 锁永远不会释放，之后所有涉及会议状态的 HTTP/WebSocket 请求都会被挂死。
+_lock = threading.RLock()
 
 
 def _redis_key(room_id: str) -> str:

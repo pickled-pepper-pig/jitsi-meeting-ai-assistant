@@ -37,6 +37,16 @@ from app.llm_service import generate_summary
 
 logger = logging.getLogger(__name__)
 
+# 事件循环心跳时间戳：用于健康检查，暴露「事件循环是否被同步代码卡死」
+_loop_last_tick: float = 0.0
+
+
+def get_loop_lag_ms() -> float:
+    """返回事件循环心跳滞后毫秒数；心跳未启动时返回 -1"""
+    if not _loop_last_tick:
+        return -1.0
+    return (time.time() - _loop_last_tick) * 1000
+
 
 class WebSocketGatewayServer:
     def __init__(self, config: AudioGatewayConfig = None):
@@ -278,7 +288,8 @@ class WebSocketGatewayServer:
             audio_bytes = base64.b64decode(audio_b64)
             sample_rate = msg.get("sample_rate", 16000)
             audio_np = np.frombuffer(audio_bytes, dtype=np.float32)
-            processed = self.audio_processor.process(audio_np, sample_rate)
+            # 音频处理是同步 CPU 计算，放到线程执行，避免阻塞事件循环
+            processed = await asyncio.to_thread(self.audio_processor.process, audio_np, sample_rate)
             if not processed.get("is_speech", True):
                 return
             self.asr_worker.submit_audio(
@@ -294,18 +305,38 @@ class WebSocketGatewayServer:
             if session_id:
                 session = self.session_manager.get_session(session_id)
                 if session:
-                    try:
-                        # 通知 Aggregator 注销会话（会发送最终语句）
-                        self.transcript_aggregator.unregister_session(session_id)
-                        # 通知 ASR Worker 结束 session
-                        self.asr_worker.finalize_session(session_id)
-                    except Exception as e:
-                        logger.error(f"End session error: {e}")
-                    self.session_manager.close_session(session_id)
-                    self.transcript_service.unregister_websocket_client(session.meeting_id, ws_id)
+                    # finalize 会跑模型推理（秒级），必须放到线程，否则整个网关卡死
+                    await asyncio.to_thread(
+                        self._finalize_session_blocking, session_id, ws_id, session.meeting_id
+                    )
+
+    def _finalize_session_blocking(self, session_id: str, ws_id: str, meeting_id: str) -> None:
+        """同步收尾逻辑（在线程池执行）：注销聚合器 → 模型 finalize → 关闭 session"""
+        try:
+            # 通知 Aggregator 注销会话（会发送最终语句）
+            self.transcript_aggregator.unregister_session(session_id)
+            # 通知 ASR Worker 结束 session
+            self.asr_worker.finalize_session(session_id)
+        except Exception as e:
+            logger.error(f"End session error: {e}")
+        self.session_manager.close_session(session_id)
+        self.transcript_service.unregister_websocket_client(meeting_id, ws_id)
 
     async def _handle_audio_binary(self, ws_id: str, data: bytes):
         pass  # 备选：二进制音频
+
+    async def _heartbeat(self) -> None:
+        """每秒打一次事件循环心跳；滞后过大说明有同步代码阻塞了事件循环"""
+        global _loop_last_tick
+        while True:
+            now = time.time()
+            if _loop_last_tick and now - _loop_last_tick > 5:
+                logger.warning(
+                    f"Event loop stalled for {now - _loop_last_tick:.1f}s "
+                    f"(同步阻塞调用未放入线程池?)"
+                )
+            _loop_last_tick = now
+            await asyncio.sleep(1)
 
     # -----------------------------------------------------------------------
     # Cleanup & helpers
@@ -358,6 +389,7 @@ class WebSocketGatewayServer:
         # WebSocket 主线程（启用 SSL，因为前端是 HTTPS 页面）
         async def _run():
             self._loop = asyncio.get_running_loop()
+            asyncio.create_task(self._heartbeat())
 
             # SSL 配置：使用前端相同的证书（覆盖 192.0.36.227）
             ssl_ctx = None

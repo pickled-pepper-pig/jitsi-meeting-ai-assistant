@@ -37,7 +37,11 @@ function getBackendBaseUrl(): string {
 }
 
 function getBackendWsUrl(): string {
-  // 直接连接后端 WebSocket 服务（WSS，因为前端是 HTTPS 页面）
+  // 开发环境通过 Vite 代理 /ws 连接后端 WebSocket（避免 WSS/WS 协议不匹配）
+  if (import.meta.env.DEV) {
+    return `wss://${window.location.host}/ws`;
+  }
+  // 生产环境直接连接后端 WebSocket 服务（WSS）
   const hostname = getJitsiHost();
   return `wss://${hostname}:${BACKEND_PORT}`;
 }
