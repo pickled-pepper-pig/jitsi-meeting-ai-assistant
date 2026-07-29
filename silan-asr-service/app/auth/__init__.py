@@ -97,8 +97,18 @@ def generate_jitsi_token(
     role: str,
     user_name: Optional[str] = None,
 ) -> str:
-    """生成 Jitsi JWT Token"""
+    """生成 Jitsi JWT Token
+
+    role: 'moderator' | 'participant'
+      - moderator: XMPP affiliation=owner（房间所有者，主持权限）
+      - participant: XMPP affiliation=member（普通参会者，不会被自动升级为 owner）
+    """
     import time
+
+    # XMPP affiliation：决定房间权限
+    # - 'owner'：主持权限
+    # - 'member'：普通参会者（关键：不填或 'none' 时 Jitsi 客户端可能自动升级为 owner）
+    affiliation = "owner" if role == "moderator" else "member"
 
     payload = {
         "iss": JWT_ISSUER,
@@ -107,6 +117,7 @@ def generate_jitsi_token(
         "room": room_id,
         "userId": user_id,
         "role": role,
+        "affiliation": affiliation,  # 显式声明 XMPP 房间身份
         "iat": int(time.time()),
         "exp": int(time.time()) + 86400,  # 24h
     }
@@ -122,3 +133,13 @@ def generate_dev_tokens(room_id: str, user_id: str) -> Dict[str, str]:
         "moderator": generate_jitsi_token(room_id, user_id, "moderator"),
         "participant": generate_jitsi_token(room_id, user_id, "participant"),
     }
+
+
+def generate_moderator_token(room_id: str, user_id: str, user_name: Optional[str] = None) -> str:
+    """生成主持人 Token（专用入口，会校验房间首人）"""
+    return generate_jitsi_token(room_id, user_id, "moderator", user_name)
+
+
+def generate_participant_token(room_id: str, user_id: str, user_name: Optional[str] = None) -> str:
+    """生成参会者 Token"""
+    return generate_jitsi_token(room_id, user_id, "participant", user_name)

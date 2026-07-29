@@ -31,6 +31,8 @@ from app.meeting_state import (
     add_message,
     get_messages_after_seq,
     get_all_messages,
+    set_ai_bot,
+    get_ai_bot,
 )
 from app.audit_log import audit_log
 from app.llm_service import generate_summary
@@ -52,6 +54,8 @@ class WebSocketGatewayServer:
     def __init__(self, config: AudioGatewayConfig = None):
         self.config = config or AudioGatewayConfig()
         self.app_config = load_config()
+        # 外部注入的 Socket.IO（用于跨通道广播 ai_bot_status / meeting_transcript）
+        self._socketio = None
 
         # Flask app (HTTP API, 后台线程运行)
         self.app = Flask(__name__)
@@ -62,7 +66,14 @@ class WebSocketGatewayServer:
         self.session_manager = AudioSessionManager(self.app_config.session_manager)
         self.asr_worker = ASRWorker("ws-gateway-worker", self.app_config.asr_worker)
         self.transcript_service = TranscriptService(self.app_config.transcript_service)
-        self.transcript_aggregator = TranscriptAggregator(silence_timeout_ms=1500)
+        # 注入 ASR Worker 的标点模型，让 final 文本在 emit 时自动加标点
+        # 静音超时 3000ms：会议场景用户句中可能停顿 1-2s，1.5s 太短会把一句话切碎
+        # 最长单句 60s：超过强制切分，避免 buffer 累积过长
+        self.transcript_aggregator = TranscriptAggregator(
+            silence_timeout_ms=3000,
+            max_utterance_duration_s=60.0,
+            punc_model=self.asr_worker.punc_model,
+        )
 
         # 会议 WebSocket 状态
         self._clients: Dict[str, dict] = {}      # ws_id -> {ws, room_id, user_id}
@@ -73,6 +84,10 @@ class WebSocketGatewayServer:
         self.transcript_aggregator.start()
         self._setup_transcript_callback()
         logger.info("WebSocketGatewayServer initialized (native WebSocket)")
+
+    def set_socketio(self, socketio) -> None:
+        """注入 Flask-SocketIO 实例（用于跨通道广播 ai_bot_status / meeting_transcript）"""
+        self._socketio = socketio
 
     def _setup_transcript_callback(self) -> None:
         """ASR Worker 结果回调 → 送入 Aggregator 聚合"""
@@ -100,24 +115,26 @@ class WebSocketGatewayServer:
         msg_type = message["type"]
         meeting_id = message["meeting_id"]
         text = message["text"]
-        
+
         logger.info(f"[Aggregator] {msg_type}: participant={message.get('participant_name')}, text='{text}'")
-        
-        # 广播到房间所有客户端
+
+        # 广播到房间所有 WebSocket 客户端（开启 AI 的那一个）
         room_clients = self._rooms.get(meeting_id, set())
-        if not room_clients:
-            return
-        
-        msg = json.dumps(message)
-        for ws_id in room_clients:
-            client = self._clients.get(ws_id)
-            if client:
-                try:
-                    asyncio.run_coroutine_threadsafe(
-                        client["ws"].send(msg), self._loop
-                    )
-                except Exception as e:
-                    logger.error(f"Broadcast {msg_type} error: {e}")
+        if room_clients:
+            msg = json.dumps(message)
+            for ws_id in room_clients:
+                client = self._clients.get(ws_id)
+                if client:
+                    try:
+                        asyncio.run_coroutine_threadsafe(
+                            client["ws"].send(msg), self._loop
+                        )
+                    except Exception as e:
+                        logger.error(f"Broadcast {msg_type} error: {e}")
+
+        # 通过 Socket.IO 广播给同一房间的其他成员（未开启 AI 的旁观者）
+        if msg_type == "transcript_final" and self._socketio:
+            self._socketio.emit("meeting_transcript", message, room=meeting_id)
 
     # -----------------------------------------------------------------------
     # WebSocket handler
@@ -126,6 +143,10 @@ class WebSocketGatewayServer:
         ws_id = str(uuid.uuid4())
         self._clients[ws_id] = {"ws": websocket, "room_id": None, "user_id": None}
         logger.info(f"Client connected: {ws_id}")
+
+        # 启动 ws ping 心跳任务：每 25s 发送 ping frame，避免被 Vite/中间代理当空闲关掉
+        # 注意：用 websockets 库的 ping() 协议层帧，不进应用层消息循环
+        ws_ping_task = asyncio.create_task(self._ws_ping(websocket))
 
         try:
             async for raw in websocket:
@@ -147,7 +168,25 @@ class WebSocketGatewayServer:
         except Exception as e:
             logger.error(f"Handler error {ws_id}: {e}")
         finally:
+            ws_ping_task.cancel()
+            try:
+                await ws_ping_task
+            except asyncio.CancelledError:
+                pass
             await self._cleanup(ws_id)
+
+    async def _ws_ping(self, websocket: ServerConnection):
+        """每 25s 发送一次 WebSocket ping 帧（协议层），保持连接活跃
+        防止 Vite/中间代理空闲超时。应用层消息循环不会收到 ping。"""
+        try:
+            while True:
+                await asyncio.sleep(25)
+                try:
+                    await websocket.ping()
+                except Exception:
+                    break
+        except asyncio.CancelledError:
+            pass
 
     # -----------------------------------------------------------------------
     # Meeting handlers
@@ -250,6 +289,15 @@ class WebSocketGatewayServer:
             meeting_id = msg.get("meeting_id", "default")
             participant_id = msg.get("participant_id", "unknown")
             participant_name = msg.get("participant_name", "Unknown")
+            # 鉴权：只有主持人（moderator）能开 AI 语音识别
+            token = msg.get("token", "")
+            if not is_moderator(token):
+                audit_log("ai_bot_denied", participant_id, meeting_id, "非主持人尝试开启AI")
+                await self._send(ws_id, {
+                    "type": "error",
+                    "message": "只有主持人可以开启 AI 语音识别",
+                })
+                return
             try:
                 session = self.session_manager.create_session(
                     session_id=session_id, meeting_id=meeting_id,
@@ -270,6 +318,9 @@ class WebSocketGatewayServer:
                     "participant_id": session.participant_id,
                     "status": session.status.value,
                 })
+                # 房间级 AI Bot 状态：更新 + 广播给所有房间成员
+                bot_state = set_ai_bot(meeting_id, "started", participant_id)
+                await self._broadcast(meeting_id, {"type": "ai_bot_status", **bot_state})
             except Exception as e:
                 await self._send(ws_id, {"type": "error", "message": str(e)})
 
@@ -290,6 +341,10 @@ class WebSocketGatewayServer:
             audio_np = np.frombuffer(audio_bytes, dtype=np.float32)
             # 音频处理是同步 CPU 计算，放到线程执行，避免阻塞事件循环
             processed = await asyncio.to_thread(self.audio_processor.process, audio_np, sample_rate)
+            # 关键：只要有音频帧进来（无论 VAD 是否判为语音），都要刷新 aggregator
+            # 的 last_update_time。否则用户句中换气时模型会返回 text=''，
+            # aggregator 看到空文本不更新 last_update_time，silence_timeout 误判句尾。
+            self.transcript_aggregator.touch_session(session_id)
             if not processed.get("is_speech", True):
                 return
             self.asr_worker.submit_audio(
@@ -321,6 +376,17 @@ class WebSocketGatewayServer:
             logger.error(f"End session error: {e}")
         self.session_manager.close_session(session_id)
         self.transcript_service.unregister_websocket_client(meeting_id, ws_id)
+        # 房间级 AI Bot 状态：恢复 idle + 广播
+        bot_state = set_ai_bot(meeting_id, "idle", None)
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                asyncio.run_coroutine_threadsafe(
+                    self._broadcast(meeting_id, {"type": "ai_bot_status", **bot_state}),
+                    loop,
+                )
+        except RuntimeError:
+            pass  # 无事件循环（重启时）
 
     async def _handle_audio_binary(self, ws_id: str, data: bytes):
         pass  # 备选：二进制音频
@@ -378,12 +444,30 @@ class WebSocketGatewayServer:
     def start(self) -> None:
         logger.info(f"Starting WebSocket Gateway on {self.config.host}:{self.config.port}")
 
-        # Flask HTTP API 运行在后台线程 (端口 + 2，避免与 Jitsi JVB 8081 冲突)
-        flask_port = self.config.port + 2  # +2 避免与 Jitsi JVB 的 8081 端口冲突
-        threading.Thread(
-            target=lambda: self.app.run(host="127.0.0.1", port=flask_port, debug=False, use_reloader=False),
-            daemon=True,
-        ).start()
+        # 启动 Socket.IO（用于房间级 ai_bot_status / meeting_transcript 广播）
+        try:
+            from flask_socketio import SocketIO
+            from app.meeting_ws import register_meeting_handlers
+            from app.meeting_state import get_ai_bot
+
+            socketio = SocketIO(self.app, cors_allowed_origins="*", async_mode="threading")
+            register_meeting_handlers(socketio)
+            # 注入 Socket.IO 到本 server，让 Aggregator 推送 transcript_final 时也广播
+            self.set_socketio(socketio)
+
+            flask_runner = lambda: socketio.run(
+                self.app, host="127.0.0.1", port=self.config.port + 2,
+                debug=False, use_reloader=False, allow_unsafe_werkzeug=True,
+            )
+            logger.info("Socket.IO enabled (room broadcast)")
+        except Exception as e:
+            logger.warning(f"Socket.IO 启动失败，回退到裸 Flask: {e}")
+            flask_runner = lambda: self.app.run(
+                host="127.0.0.1", port=self.config.port + 2, debug=False, use_reloader=False,
+            )
+
+        flask_port = self.config.port + 2
+        threading.Thread(target=flask_runner, daemon=True).start()
         logger.info(f"Flask HTTP API on 127.0.0.1:{flask_port}")
 
         # WebSocket 主线程（启用 SSL，因为前端是 HTTPS 页面）

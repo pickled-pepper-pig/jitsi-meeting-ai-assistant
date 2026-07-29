@@ -79,11 +79,34 @@ export class AudioCaptureService {
         console.log('[AudioCapture] WebSocket closed');
         if (this.state.status === 'recording') {
           this.updateState({ status: 'idle' });
+          // 自动重连（最多 3 次，间隔 1s）
+          this.attemptReconnect();
         }
       };
 
       setTimeout(() => reject(new Error('WebSocket connection timeout')), 5000);
     });
+  }
+
+  private reconnectAttempts = 0;
+  private async attemptReconnect(): Promise<void> {
+    if (this.reconnectAttempts >= 3) {
+      console.error('[AudioCapture] Reconnect failed after 3 attempts');
+      return;
+    }
+    this.reconnectAttempts += 1;
+    console.log(`[AudioCapture] Reconnect attempt ${this.reconnectAttempts}/3...`);
+    await new Promise(r => setTimeout(r, 1000));
+    try {
+      await this.connectWebSocket();
+      await this.createSession();
+      this.reconnectAttempts = 0;
+      this.updateState({ status: 'recording' });
+      console.log('[AudioCapture] Reconnected successfully');
+    } catch (e) {
+      console.warn('[AudioCapture] Reconnect failed:', e);
+      this.attemptReconnect();
+    }
   }
 
   private createSession(): Promise<void> {
@@ -117,6 +140,7 @@ export class AudioCaptureService {
         meeting_id: this.config.roomId,
         participant_id: this.config.participantId,
         participant_name: this.config.participantName,
+        token: this.config.token || '',
       }));
 
       setTimeout(() => {
@@ -158,9 +182,19 @@ export class AudioCaptureService {
       if (this.state.status !== 'recording') return;
 
       const inputBuffer = event.inputBuffer.getChannelData(0);
-      // 发送 float32 PCM 数据（base64 编码）
-      this.sendAudioChunk(this.config.participantId, inputBuffer);
-      this.updateState({ audioChunks: this.state.audioChunks + 1 });
+      // 关键：先发再计数。sendAudioChunk 内部会检查 ws.readyState
+      // 如果 ws 已关闭则静默丢弃；为了避免误导，我们只在 ws 还活着时计数
+      if (this.ws && this.ws.readyState === WebSocket.OPEN && this.sessionId) {
+        this.sendAudioChunk(this.config.participantId, inputBuffer);
+        this.updateState({ audioChunks: this.state.audioChunks + 1 });
+      } else {
+        // ws 已断开：停止本地采集
+        console.warn('[AudioCapture] WS not open, stopping local capture');
+        this.processor?.disconnect();
+        this.sourceNode?.disconnect();
+        this.mediaStream?.getTracks().forEach(t => t.stop());
+        this.updateState({ status: 'idle' });
+      }
     };
 
     this.sourceNode.connect(this.processor);
@@ -216,6 +250,7 @@ export class AudioCaptureService {
       type: 'final',
       roomId: result.meeting_id || this.config.roomId,
       participantId: result.participant_id || '',
+      participantName: result.participant_name || '',
       text: result.text || '',
       timestamp: result.timestamp || Date.now(),
     };

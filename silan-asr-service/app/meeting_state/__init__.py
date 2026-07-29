@@ -89,6 +89,7 @@ def get_or_create_meeting(room_id: str) -> Dict[str, Any]:
                 "botStatus": "not_started",
                 "participants": [],
                 "asrSessions": [],
+                "firstModeratorId": None,  # 第一个以主持人身份加入的用户 ID
             }
         return _meetings[room_id]
 
@@ -129,22 +130,49 @@ def end_meeting(room_id: str) -> None:
         _save_to_redis(room_id, meeting)
 
 
-def enable_ai(room_id: str, user_id: str) -> None:
-    """开启 AI 助手"""
+def set_ai_bot(room_id: str, status: str, started_by: str = None) -> Dict[str, Any]:
+    """设置 AI Bot 状态（房间级别，所有人可见）
+
+    status: 'idle' | 'starting' | 'started' | 'stopping'
+    started_by: 开启 AI 的用户 ID（停止时清空）
+    """
     with _lock:
         meeting = get_or_create_meeting(room_id)
-        meeting["aiEnabled"] = True
-        meeting["botStatus"] = "starting"
+        meeting["botStatus"] = status
+        if status == "started" and started_by:
+            meeting["aiEnabled"] = True
+            meeting["aiStartedBy"] = started_by
+        elif status == "idle":
+            meeting["aiEnabled"] = False
+            meeting["aiStartedBy"] = None
         _save_to_redis(room_id, meeting)
+        return {
+            "roomId": room_id,
+            "status": meeting["botStatus"],
+            "aiEnabled": meeting["aiEnabled"],
+            "startedBy": meeting.get("aiStartedBy"),
+        }
+
+
+def get_ai_bot(room_id: str) -> Dict[str, Any]:
+    """获取 AI Bot 当前状态（用于 sync 时补发）"""
+    meeting = get_or_create_meeting(room_id)
+    return {
+        "roomId": room_id,
+        "status": meeting.get("botStatus", "idle"),
+        "aiEnabled": meeting.get("aiEnabled", False),
+        "startedBy": meeting.get("aiStartedBy"),
+    }
+
+
+def enable_ai(room_id: str, user_id: str) -> None:
+    """开启 AI 助手（兼容旧调用）"""
+    set_ai_bot(room_id, "started", user_id)
 
 
 def disable_ai(room_id: str) -> None:
-    """停止 AI 助手"""
-    with _lock:
-        meeting = get_or_create_meeting(room_id)
-        meeting["aiEnabled"] = False
-        meeting["botStatus"] = "stopped"
-        _save_to_redis(room_id, meeting)
+    """停止 AI 助手（兼容旧调用）"""
+    set_ai_bot(room_id, "idle", None)
 
 
 def update_bot_status(room_id: str, status: str) -> None:
@@ -166,6 +194,40 @@ def add_participant(room_id: str, participant: Dict[str, Any]) -> None:
         else:
             existing.update(participant)
         _save_to_redis(room_id, meeting)
+
+
+# ---------------------------------------------------------------------------
+# 主持人占位（一个房间只有一个主持人）
+# ---------------------------------------------------------------------------
+
+def claim_moderator(room_id: str, user_id: str) -> Dict[str, Any]:
+    """尝试认领主持人位置。
+
+    返回：
+      - {"ok": True, "firstModeratorId": "..."}：成功认领（房间无主持人 / 是同一人重连）
+      - {"ok": False, "firstModeratorId": "..."}：被占用了
+
+    规则：
+      - firstModeratorId 为空 → 写入并返回 ok
+      - user_id == firstModeratorId → 重连场景，允许
+      - 否则 → 拒绝，返回已有人 userId
+    """
+    with _lock:
+        meeting = get_or_create_meeting(room_id)
+        current = meeting.get("firstModeratorId")
+        if not current:
+            meeting["firstModeratorId"] = user_id
+            _save_to_redis(room_id, meeting)
+            return {"ok": True, "firstModeratorId": user_id}
+        if current == user_id:
+            return {"ok": True, "firstModeratorId": current}
+        return {"ok": False, "firstModeratorId": current}
+
+
+def get_first_moderator(room_id: str) -> Optional[str]:
+    """获取当前房间的主持人 userId（无则返回 None）"""
+    meeting = get_or_create_meeting(room_id)
+    return meeting.get("firstModeratorId")
 
 
 def remove_participant(room_id: str, participant_id: str) -> None:

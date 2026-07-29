@@ -57,6 +57,10 @@ temp/
 
 # === 技能目录 ===
 .trae/skills/
+.qoder/repowiki/
+
+# === 测试生成的音频（17M+，每次测试会重新生成）===
+silan-asr-service/test_audio/
 
 # === RSA 密钥 ===
 backend/keys/

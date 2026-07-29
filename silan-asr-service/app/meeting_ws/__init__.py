@@ -63,6 +63,9 @@ def register_meeting_handlers(socketio) -> None:
             "roomId": room_id,
             "lastSeq": meeting["seq"],
         })
+        # 补发房间当前的 AI Bot 状态（让中途加入的人也能看到是否在录音）
+        from app.meeting_state import get_ai_bot
+        emit("ai_bot_status", get_ai_bot(room_id))
 
         audit_log("join", user_id, room_id, f"role={role}")
         logger.info(f"[WS] 用户 {user_id} 加入房间 {room_id}（角色: {role}）")

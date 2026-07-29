@@ -15,7 +15,8 @@ interface SidebarProps {
   onCopyInvite?: () => void;
   inviteCopied?: boolean;
   onStartBot?: () => void;
-  botStatus?: 'idle' | 'starting' | 'started';
+  onStopBot?: () => void;
+  botStatus?: 'idle' | 'starting' | 'started' | 'stopping';
   audioState?: AudioCaptureState | null;
 }
 
@@ -28,6 +29,7 @@ export function Sidebar({
   onCopyInvite,
   inviteCopied,
   onStartBot,
+  onStopBot,
   botStatus = 'idle',
   audioState,
 }: SidebarProps) {
@@ -68,35 +70,50 @@ export function Sidebar({
       )}
 
       <div className="bot-section">
-        <button 
-          className={`bot-btn ${botStatus === 'started' ? 'bot-active' : ''}`}
-          onClick={onStartBot}
-          disabled={botStatus === 'starting' || botStatus === 'started'}
-        >
-          {botStatus === 'idle' && '🎙️ 开启 AI 语音识别'}
-          {botStatus === 'starting' && '⏳ 连接中...'}
-          {botStatus === 'started' && '🎤 正在录制中'}
-        </button>
-        {audioState && audioState.status === 'recording' && (
-          <div className="audio-status">
-            <div className="audio-status-item">
-              <span className="audio-status-label">参会者:</span>
-              <span className="audio-status-value">{audioState.participants.length} 人</span>
+        {isModerator ? (
+          // 主持人：可点击的开启/停止按钮
+          <>
+            <button
+              className={`bot-btn ${botStatus === 'started' ? 'bot-active' : ''} ${botStatus === 'stopping' ? 'bot-stopping' : ''}`}
+              onClick={botStatus === 'started' ? onStopBot : onStartBot}
+              disabled={botStatus === 'starting' || botStatus === 'stopping'}
+            >
+              {botStatus === 'idle' && '🎙️ 开启 AI 语音识别'}
+              {botStatus === 'starting' && '⏳ 连接中...'}
+              {botStatus === 'started' && '⏹ 停止录制'}
+              {botStatus === 'stopping' && '⏳ 停止中...'}
+            </button>
+            {audioState && audioState.status === 'recording' && (
+              <div className="audio-status">
+                <div className="audio-status-item">
+                  <span className="audio-status-label">参会者:</span>
+                  <span className="audio-status-value">{audioState.participants.length} 人</span>
+                </div>
+                <div className="audio-status-item">
+                  <span className="audio-status-label">音频块:</span>
+                  <span className="audio-status-value">{audioState.audioChunks}</span>
+                </div>
+                <div className="audio-wave-indicator">
+                  <div className="audio-bar"></div>
+                  <div className="audio-bar"></div>
+                  <div className="audio-bar"></div>
+                  <div className="audio-bar"></div>
+                  <div className="audio-bar"></div>
+                </div>
+              </div>
+            )}
+            <p className="bot-tip">点击后开始采集音频并发送给 ASR 服务</p>
+          </>
+        ) : botStatus === 'started' ? (
+          // 旁观者：主持人开了 AI → 只显示状态，不能操作
+          <div className="bot-view-only">
+            <div className="bot-view-only-indicator">
+              <span className="recording-dot"></span>
+              <span>AI 正在转写中</span>
             </div>
-            <div className="audio-status-item">
-              <span className="audio-status-label">音频块:</span>
-              <span className="audio-status-value">{audioState.audioChunks}</span>
-            </div>
-            <div className="audio-wave-indicator">
-              <div className="audio-bar"></div>
-              <div className="audio-bar"></div>
-              <div className="audio-bar"></div>
-              <div className="audio-bar"></div>
-              <div className="audio-bar"></div>
-            </div>
+            <p className="bot-tip">由会议主持人开启，转写内容会实时显示在下方面板</p>
           </div>
-        )}
-        <p className="bot-tip">点击后开始采集音频并发送给 ASR 服务</p>
+        ) : null}
       </div>
 
       <MessageList messages={messages} />

@@ -9,6 +9,8 @@ from app.auth import (
     is_moderator,
     generate_jitsi_token,
     generate_dev_tokens,
+    generate_moderator_token,
+    generate_participant_token,
 )
 from app.meeting_state import (
     get_or_create_meeting,
@@ -16,6 +18,8 @@ from app.meeting_state import (
     disable_ai,
     add_participant,
     add_asr_session,
+    claim_moderator,
+    get_first_moderator,
 )
 from app.audit_log import get_logs as get_audit_logs
 
@@ -91,7 +95,7 @@ def is_moderator_api():
 
 @api_bp.route("/api/dev/tokens", methods=["POST"])
 def dev_tokens():
-    """开发环境：生成测试 JWT Token"""
+    """开发环境：生成测试 JWT Token（保留旧入口）"""
     data = request.get_json(silent=True) or {}
     room_id = data.get("roomId")
     user_id = data.get("userId")
@@ -101,6 +105,54 @@ def dev_tokens():
 
     tokens = generate_dev_tokens(room_id, user_id)
     return jsonify(tokens)
+
+
+@api_bp.route("/api/join", methods=["POST"])
+def join_meeting():
+    """加入会议：服务端判定主持人资格并签发对应 token
+
+    Body: { "roomId": "...", "userId": "...", "userName": "...", "asModerator": true/false }
+
+    规则：
+      - asModerator=true 且房间 firstModeratorId 为空 → 写入并签发 moderator token
+      - asModerator=true 且 userId==firstModeratorId → 重连签发 moderator token
+      - asModerator=true 且其他人已占 → 409 拒绝
+      - asModerator=false → 签发 participant token（任何人随时可拿）
+    """
+    data = request.get_json(silent=True) or {}
+    room_id = data.get("roomId")
+    user_id = data.get("userId")
+    user_name = data.get("userName")
+    as_moderator = bool(data.get("asModerator", False))
+
+    if not room_id or not user_id:
+        return jsonify({"error": "roomId 和 userId 必填"}), 400
+
+    if as_moderator:
+        claim = claim_moderator(room_id, user_id)
+        if not claim["ok"]:
+            return jsonify({
+                "error": "moderator_occupied",
+                "message": "此房间已有人以主持人身份加入，不能再以主持人身份加入",
+                "currentModeratorId": claim["firstModeratorId"],
+            }), 409
+        token = generate_moderator_token(room_id, user_id, user_name)
+        return jsonify({
+            "token": token,
+            "role": "moderator",
+            "roomId": room_id,
+            "userId": user_id,
+        })
+    else:
+        token = generate_participant_token(room_id, user_id, user_name)
+        # 在 meeting_state 中顺便把参会者落表（如果存在房间）
+        get_or_create_meeting(room_id)
+        return jsonify({
+            "token": token,
+            "role": "participant",
+            "roomId": room_id,
+            "userId": user_id,
+        })
 
 
 # ---------------------------------------------------------------------------

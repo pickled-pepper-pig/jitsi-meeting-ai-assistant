@@ -2,6 +2,7 @@ export interface TranscriptResult {
   type: 'partial' | 'final';
   roomId: string;
   participantId: string;
+  participantName?: string;  // 说话人的显示名（来自 ASR 服务回调）
   text: string;
   timestamp: number;
   confidence?: number;
@@ -13,6 +14,7 @@ export interface AudioCaptureConfig {
   participantId: string;
   participantName: string;
   wsUrl: string;
+  token?: string;  // 主持人 JWT（开启 AI 鉴权用）
   sampleRate?: number;
   chunkSize?: number;
 }

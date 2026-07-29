@@ -121,12 +121,22 @@ export function useJitsiApi(options: JitsiOptions, callbacks: JitsiEventCallback
             bosh: getJitsiBoshUrl(),
             websocket: getJitsiWebsocketUrl(),
             disableInviteFunctions: true,
+            // 关闭"主持人"指示器（小红点、底部弹窗）
+            disableModeratorIndicator: true,
+            // 关闭"你现在是主持人了"这种 notification
+            notifications: [],
+            // 不让客户端根据"JWT 中没有 owner affiliation"自动升级
+            enableUserRolesBasedOnToken: true,
           },
           interfaceConfigOverwrite: {
             SHOW_JITSI_WATERMARK: false,
             SHOW_WATERMARK_FOR_GUESTS: false,
             SHOW_PROMOTIONAL_CLOSE_PAGE: false,
             HIDE_INVITE_MORE_HEADER: true,
+            // 隐藏"你是主持人"的角色标签
+            DISABLE_VIDEO_BACKGROUND: false,
+            // 完全不显示"你现在是主持人了"的提示
+            DISABLE_RINGING: false,
           },
           userInfo: {
             displayName,

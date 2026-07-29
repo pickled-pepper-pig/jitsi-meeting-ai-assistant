@@ -28,12 +28,16 @@ export default function App() {
   const [aiEnabled, setAiEnabled] = useState(false);
   const [copied, setCopied] = useState(false);
   const [showProxyWarning, setShowProxyWarning] = useState(false);
-  const [botStatus, setBotStatus] = useState<'idle' | 'starting' | 'started'>('idle');
+  const [showModeratorOccupied, setShowModeratorOccupied] = useState(false);
+  const [moderatorOccupiedMessage, setModeratorOccupiedMessage] = useState('');
+  const [botStatus, setBotStatus] = useState<'idle' | 'starting' | 'started' | 'stopping'>('idle');
   const [audioState, setAudioState] = useState<AudioCaptureState | null>(null);
 
   const tokenRef = useRef<string>('');
   const userIdRef = useRef<string>('');
   const audioServiceRef = useRef<AudioCaptureService | null>(null);
+  // 标记"当前用户是否就是开启 AI 的人"——区分自己开 vs 别人开后只能查看
+  const isBotOperatorRef = useRef<boolean>(false);
 
   const messageBufferRef = useRef(new MessageBuffer());
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -98,26 +102,81 @@ export default function App() {
         break;
       case 'summary':
         break;
+      case 'ai_bot_status':
+        // 房间级 AI Bot 状态（自己或别人开启都会收到）
+        console.log('[App] AI Bot 状态:', message);
+        if (message.status === 'started' && message.startedBy === userIdRef.current) {
+          // 自己开启的（已通过本地 handleStartBot 切到 started，不重复处理）
+          isBotOperatorRef.current = true;
+        } else if (message.status === 'started') {
+          // 别人开启的 → 旁观者视角
+          isBotOperatorRef.current = false;
+          setBotStatus('started');
+        } else if (message.status === 'idle') {
+          // 任何人关闭都会收到
+          isBotOperatorRef.current = false;
+          setBotStatus('idle');
+        }
+        break;
+      case 'meeting_transcript':
+        // 旁观者收到主持人的 final 转写 → 推入消息列表
+        {
+          const t = message as unknown as {
+            text: string;
+            participant_id?: string;
+            participant_name?: string;
+            timestamp?: number;
+          };
+          if (t.text) {
+            const speakerName = t.participant_name || 'AI 转写';
+            const ts = t.timestamp || Date.now();
+            setMessages(prev => {
+              // 去重：同 speaker + 同内容 + 1s 内的视为同一条
+              const last = prev[prev.length - 1];
+              if (last && last.sender === speakerName && last.content === t.text && Math.abs(last.timestamp - ts) < 1000) {
+                return prev;
+              }
+              return [...prev, {
+                id: `remote-transcript-${ts}-${Math.random()}`,
+                seq: Date.now(),
+                roomId: roomName,
+                sender: speakerName,
+                content: t.text,
+                timestamp: ts,
+                type: 'text' as const,
+              }];
+            });
+          }
+        }
+        break;
       case 'error':
         console.warn('[App] 服务端提示:', message.message);
         break;
     }
-  }, [refreshMessages]);
+  }, [refreshMessages, roomName]);
 
   const { connect, send, status } = useWebSocket({
     url: API_CONFIG.wsUrl,
     onMessage: handleWsMessage,
   });
 
-  const fetchDevToken = async (roomId: string, userId: string, moderator: boolean) => {
-    const res = await fetch(`${API_CONFIG.baseUrl}/api/dev/tokens`, {
+  const fetchJoinToken = async (roomId: string, userId: string, userName: string, asModerator: boolean) => {
+    const res = await fetch(`${API_CONFIG.baseUrl}/api/join`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ roomId, userId }),
+      body: JSON.stringify({ roomId, userId, userName, asModerator }),
     });
+    if (res.status === 409) {
+      const data = await res.json().catch(() => ({}));
+      const err: Error & { code?: string; currentModeratorId?: string } = new Error(
+        data.message || '此房间已有人以主持人身份加入',
+      );
+      err.code = 'moderator_occupied';
+      err.currentModeratorId = data.currentModeratorId;
+      throw err;
+    }
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const tokens = await res.json();
-    return moderator ? tokens.moderator : tokens.participant;
+    return res.json() as Promise<{ token: string; role: 'moderator' | 'participant' }>;
   };
 
   const handleJoin = async () => {
@@ -130,12 +189,20 @@ export default function App() {
     userIdRef.current = userId;
 
     try {
-      const token = await fetchDevToken(roomName.trim(), userId, isModerator);
-      tokenRef.current = token;
+      const result = await fetchJoinToken(roomName.trim(), userId, displayName.trim(), isModerator);
+      tokenRef.current = result.token;
+      // 真实角色由后端决定（避免前端伪造）
+      setIsModerator(result.role === 'moderator');
       setAiEnabled(true);
       setJoined(true);
-      connect(roomName.trim(), token);
-    } catch {
+      connect(roomName.trim(), result.token);
+    } catch (err: any) {
+      if (err?.code === 'moderator_occupied') {
+        // 显示提示窗，不进入会议界面
+        setModeratorOccupiedMessage(err.message || '此房间已有人以主持人身份加入');
+        setShowModeratorOccupied(true);
+        return;
+      }
       setShowProxyWarning(true);
     }
   };
@@ -196,6 +263,10 @@ export default function App() {
 
   const handleStartBot = async () => {
     if (botStatus !== 'idle') return;
+    if (!isModerator) {
+      alert('只有主持人可以开启 AI 语音识别');
+      return;
+    }
     setBotStatus('starting');
 
     try {
@@ -207,26 +278,27 @@ export default function App() {
         participantId: userIdRef.current,
         participantName: displayName,
         wsUrl,
+        token: tokenRef.current,
       });
 
       audioServiceRef.current = audioService;
       audioService.subscribe((state) => {
         setAudioState(state);
-        // 只将 final 转写结果添加到消息列表
+        // 主持人本人收到的 final → 直接进消息列表（不通过 Socket.IO 中转）
         if (state.transcripts.length > 0) {
           const latestTranscript = state.transcripts[state.transcripts.length - 1];
           if (latestTranscript.text && latestTranscript.type === 'final') {
+            const speakerName = latestTranscript.participantName || 'AI 转写';
             setMessages(prev => {
-              // 避免重复添加相同的转写结果
               const lastMsg = prev[prev.length - 1];
-              if (lastMsg && lastMsg.sender === 'AI 转写' && lastMsg.content === latestTranscript.text) {
+              if (lastMsg && lastMsg.sender === speakerName && lastMsg.content === latestTranscript.text) {
                 return prev;
               }
               return [...prev, {
                 id: `transcript-${latestTranscript.timestamp}`,
                 seq: Date.now(),
                 roomId: roomName,
-                sender: 'AI 转写',
+                sender: speakerName,
                 content: latestTranscript.text,
                 timestamp: latestTranscript.timestamp,
                 type: 'text' as const,
@@ -236,10 +308,30 @@ export default function App() {
         }
       });
       await audioService.start();
+      isBotOperatorRef.current = true;
       setBotStatus('started');
       console.log('[App] AI Bot 已启动，音频采集中...');
     } catch (err) {
       console.error('[App] AI Bot 启动失败:', err);
+      isBotOperatorRef.current = false;
+      setBotStatus('idle');
+    }
+  };
+
+  const handleStopBot = async () => {
+    if (botStatus !== 'started') return;
+    if (!isBotOperatorRef.current) return;  // 旁观者没权利停
+    setBotStatus('stopping');
+    try {
+      await audioServiceRef.current?.stop();
+      audioServiceRef.current = null;
+      setAudioState(null);
+      isBotOperatorRef.current = false;
+      setBotStatus('idle');
+      console.log('[App] AI Bot 已停止');
+    } catch (err) {
+      console.error('[App] AI Bot 停止失败:', err);
+      isBotOperatorRef.current = false;
       setBotStatus('idle');
     }
   };
@@ -268,9 +360,30 @@ export default function App() {
             </div>
           </div>
         )}
+        {showModeratorOccupied && (
+          <div className="proxy-warning-overlay">
+            <div className="proxy-warning-modal">
+              <div className="proxy-warning-icon">🔒</div>
+              <h3>无法以主持人身份加入</h3>
+              <p>{moderatorOccupiedMessage}</p>
+              <p style={{ fontSize: 13, color: '#6b7280', marginTop: 8 }}>
+                取消勾选「以主持人身份加入」可作为参会者加入
+              </p>
+              <button
+                className="proxy-warning-btn"
+                onClick={() => {
+                  setShowModeratorOccupied(false);
+                  setIsModerator(false);
+                }}
+              >
+                知道了
+              </button>
+            </div>
+          </div>
+        )}
         <div className="join-card">
-          <h1>会议 AI 助手</h1>
-          <p className="subtitle">实时 ASR 转写 + 聊天展示 + 会议总结</p>
+          <h1>Jitsi 会议 AI 助手</h1>
+          <p className="subtitle">实时语音转写 + 会议纪要</p>
 
           <div className="form-group">
             <label>房间名</label>
@@ -310,12 +423,10 @@ export default function App() {
           <div className="tips">
             <p>使用说明：</p>
             <ul>
-              <li>使用本地 Jitsi 服务（自部署）</li>
-              <li>后端统一服务：ASR 转写 + 会议管理（Python，端口 8080）</li>
-              <li>主持人可点击「总结会议」生成纪要</li>
-              <li>会议结束后自动触发总结</li>
-              <li>Socket.IO 断线自动重连 + 消息补齐</li>
-              <li>如无法访问，请关闭代理或VPN后重试</li>
+              <li>填好房间名与昵称即可加入会议</li>
+              <li>点「开启 AI 语音识别」开始实时转写为文字</li>
+              <li>主持人可点「总结会议」一键生成纪要</li>
+              <li>网络中断会自动重连，不丢失已记录内容</li>
             </ul>
           </div>
         </div>
@@ -346,6 +457,7 @@ export default function App() {
         onCopyInvite={copyInviteLink}
         inviteCopied={copied}
         onStartBot={handleStartBot}
+        onStopBot={handleStopBot}
         botStatus={botStatus}
         audioState={audioState}
       />

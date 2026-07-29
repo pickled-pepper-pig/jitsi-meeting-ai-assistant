@@ -108,9 +108,15 @@ class ASRWorker:
         self.session_states: Dict[str, object] = {}
         self._transcript_callback: Optional[Callable] = None
         
+        # 流式 ASR 参数：
+        # - chunk_size=[0, 10, 5]：当前块 10 帧 = 600ms（决定 partial 延迟）
+        # - encoder_chunk_look_back=10：encoder 看前 10 块 = 6s 上下文（识别连贯性）
+        # - decoder_chunk_look_back=4：decoder 看前 4 块 = 2.4s 上下文（修正回退）
+        # 增大 look_back 能让模型看到更多历史，partial 不再"只识别第一个字"
+        # 保持 chunk_size 不变以维持低延迟
         self.chunk_size = [0, 10, 5]
-        self.encoder_chunk_look_back = 4
-        self.decoder_chunk_look_back = 1
+        self.encoder_chunk_look_back = 10
+        self.decoder_chunk_look_back = 4
         
         self._load_model()
     
@@ -227,7 +233,7 @@ class ASRWorker:
                 decoder_chunk_look_back=self.decoder_chunk_look_back,
                 use_itn=True,
             )
-            
+
             logger.info(f"Model result: {result}")
             
             if result and len(result) > 0:

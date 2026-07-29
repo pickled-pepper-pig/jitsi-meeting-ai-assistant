@@ -315,7 +315,17 @@ body {
 }
 
 .bot-btn.bot-active {
-  background: #22c55e;
+  background: #ef4444;
+  animation: pulse-recording 1.5s ease-in-out infinite;
+}
+
+.bot-btn.bot-stopping {
+  background: #9ca3af;
+}
+
+@keyframes pulse-recording {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4); }
+  50% { box-shadow: 0 0 0 6px rgba(239, 68, 68, 0); }
 }
 
 .bot-tip {
@@ -323,6 +333,33 @@ body {
   font-size: 11px;
   color: #9ca3af;
   text-align: center;
+}
+
+/* 旁观者视图：仅显示"AI 正在转写中"，不可点 */
+.bot-view-only {
+  padding: 12px 16px;
+  background: linear-gradient(135deg, #fff7ed 0%, #ffedd5 100%);
+  border: 1px solid #fdba74;
+  border-radius: 8px;
+  text-align: center;
+}
+
+.bot-view-only-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #c2410c;
+}
+
+.bot-view-only .recording-dot {
+  width: 10px;
+  height: 10px;
+  background: #ef4444;
+  border-radius: 50%;
+  display: inline-block;
+  animation: pulse-recording 1.5s ease-in-out infinite;
 }
 
 .audio-status {
