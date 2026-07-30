@@ -129,12 +129,14 @@ def join_meeting():
         return jsonify({"error": "roomId 和 userId 必填"}), 400
 
     if as_moderator:
-        claim = claim_moderator(room_id, user_id)
+        claim = claim_moderator(room_id, user_id, user_name)
         if not claim["ok"]:
+            moderator_name = claim.get("firstModeratorName") or claim["firstModeratorId"]
             return jsonify({
                 "error": "moderator_occupied",
-                "message": "此房间已有人以主持人身份加入，不能再以主持人身份加入",
+                "message": f"此房间已有「{moderator_name}」以主持人身份加入，不能再以主持人身份加入",
                 "currentModeratorId": claim["firstModeratorId"],
+                "currentModeratorName": claim.get("firstModeratorName"),
             }), 409
         token = generate_moderator_token(room_id, user_id, user_name)
         return jsonify({

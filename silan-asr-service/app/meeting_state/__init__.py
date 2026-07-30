@@ -90,6 +90,7 @@ def get_or_create_meeting(room_id: str) -> Dict[str, Any]:
                 "participants": [],
                 "asrSessions": [],
                 "firstModeratorId": None,  # 第一个以主持人身份加入的用户 ID
+                "firstModeratorName": None,  # 第一个主持人的昵称（用于前端展示）
             }
         return _meetings[room_id]
 
@@ -200,28 +201,42 @@ def add_participant(room_id: str, participant: Dict[str, Any]) -> None:
 # 主持人占位（一个房间只有一个主持人）
 # ---------------------------------------------------------------------------
 
-def claim_moderator(room_id: str, user_id: str) -> Dict[str, Any]:
+def claim_moderator(room_id: str, user_id: str, user_name: Optional[str] = None) -> Dict[str, Any]:
     """尝试认领主持人位置。
 
     返回：
-      - {"ok": True, "firstModeratorId": "..."}：成功认领（房间无主持人 / 是同一人重连）
-      - {"ok": False, "firstModeratorId": "..."}：被占用了
+      - {"ok": True, "firstModeratorId": "...", "firstModeratorName": "..."}：成功认领（房间无主持人 / 是同一人重连）
+      - {"ok": False, "firstModeratorId": "...", "firstModeratorName": "..."}：被占用了
 
     规则：
       - firstModeratorId 为空 → 写入并返回 ok
       - user_id == firstModeratorId → 重连场景，允许
-      - 否则 → 拒绝，返回已有人 userId
+      - 否则 → 拒绝，返回已有人 userId / userName
     """
     with _lock:
         meeting = get_or_create_meeting(room_id)
         current = meeting.get("firstModeratorId")
         if not current:
             meeting["firstModeratorId"] = user_id
+            if user_name:
+                meeting["firstModeratorName"] = user_name
             _save_to_redis(room_id, meeting)
-            return {"ok": True, "firstModeratorId": user_id}
+            return {
+                "ok": True,
+                "firstModeratorId": user_id,
+                "firstModeratorName": meeting.get("firstModeratorName"),
+            }
         if current == user_id:
-            return {"ok": True, "firstModeratorId": current}
-        return {"ok": False, "firstModeratorId": current}
+            return {
+                "ok": True,
+                "firstModeratorId": current,
+                "firstModeratorName": meeting.get("firstModeratorName"),
+            }
+        return {
+            "ok": False,
+            "firstModeratorId": current,
+            "firstModeratorName": meeting.get("firstModeratorName"),
+        }
 
 
 def get_first_moderator(room_id: str) -> Optional[str]:

@@ -116,6 +116,13 @@ npx vite --port 3000 --host
 # 前端运行在 https://localhost:3000
 ```
 
+### 4. ASR 链路测试
+
+```bash
+# 流式回放 wav 模拟真实会议
+python -m test_client.wav_stream_client --wav path/to/audio.wav
+```
+
 ### 完整启动顺序
 
 ```bash
