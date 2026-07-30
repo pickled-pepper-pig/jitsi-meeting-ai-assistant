@@ -147,6 +147,12 @@ def register_meeting_handlers(socketio) -> None:
             loop = _get_or_create_loop()
             summary = loop.run_until_complete(generate_summary(room_id, messages))
 
+            # 空消息时 generate_summary 返回占位文案 "本次会议暂无聊天记录。"
+            # 不持久化也不广播，避免下一个人加入看到一条无意义的 summary。
+            if not messages or summary == "本次会议暂无聊天记录。":
+                socketio.emit("meeting_status", {"message": "本次会议暂无聊天记录，已省略总结。"}, room=sid)
+                return
+
             summary_message = add_message(room_id, {
                 "sender": "AI 助手",
                 "content": summary,

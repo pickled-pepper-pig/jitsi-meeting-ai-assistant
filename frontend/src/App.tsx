@@ -32,7 +32,6 @@ export default function App() {
   const [moderatorOccupiedMessage, setModeratorOccupiedMessage] = useState('');
   const [botStatus, setBotStatus] = useState<'idle' | 'starting' | 'started' | 'stopping'>('idle');
   const [audioState, setAudioState] = useState<AudioCaptureState | null>(null);
-  const [micMuted, setMicMuted] = useState(false);  // 来自 Jitsi 工具栏的麦克风静音状态
   // 旁观者侧收到的实时 partial 转写（来自操作者的 ASR 流）
   const [remotePartial, setRemotePartial] = useState<{ text: string; participant: string } | null>(null);
   // 真实参会者数量（含自己，来自 Jitsi IFrame API 的 participantJoined/Left 事件）
@@ -262,6 +261,26 @@ export default function App() {
       // 真实角色由后端决定（避免前端伪造）
       setIsModerator(result.role === 'moderator');
       setAiEnabled(true);
+
+      // HTTP 兜底拉取房间历史消息（chat + summary）：
+      // - 即便 WS 还没建连/握手失败，新用户也能立刻看到进入前的会议纪要
+      // - 与 WS 的 room_state_snapshot 互为冗余，messageBuffer 按 seq 去重
+      try {
+        const historyRes = await fetch(
+          `${API_CONFIG.baseUrl}/api/meetings/${encodeURIComponent(roomName.trim())}/messages?token=${encodeURIComponent(result.token)}`,
+        );
+        if (historyRes.ok) {
+          const history = await historyRes.json();
+          if (Array.isArray(history.messages) && history.messages.length > 0) {
+            messageBufferRef.current.addBatch(history.messages);
+            refreshMessages();
+            console.log(`[App] 加载历史 ${history.messages.length} 条消息`);
+          }
+        }
+      } catch {
+        // 拉取失败不阻塞加入，WS 后续 snapshot 会补齐
+      }
+
       setJoined(true);
       connect(roomName.trim(), result.token);
     } catch (err: any) {
@@ -373,7 +392,7 @@ export default function App() {
         backendWsUrl: API_CONFIG.wsUrl,
         meetingId: roomName,
       });
-      await receiver.connectBackendForSession(participantId, API_CONFIG.wsUrl);
+      await receiver.connectBackendForSession(participantId, API_CONFIG.wsUrl, tokenRef.current);
       setRemoteCaptureCount(receiver.getAllCaptureStates().filter(s => s.isCapturing).length);
       console.log(`[App] 远程参会者音频已接入: ${participantName}`);
     } catch (err) {
@@ -387,10 +406,9 @@ export default function App() {
       alert('只有主持人可以开启 AI 语音识别');
       return;
     }
-    if (micMuted) {
-      alert('请先取消 Jitsi 工具栏的麦克风静音，再开启 AI 语音识别');
-      return;
-    }
+    // 不再因为本人麦克风静音而拦截开启 AI：
+    // 麦克风静音只是"是否上传本人音频"的开关，不影响 AI 功能的总开关；
+    // 静音中开启后，本端 audio_chunk 不上传，但其他未静音参会者照常转写。
     setBotStatus('starting');
 
     try {
@@ -484,16 +502,8 @@ export default function App() {
     }
   };
 
-  // 用户在 Jitsi 工具栏点了麦克风静音 → 如果正在录制，自动停止录制
-  // 配合 audioCapture 的"静音帧不发送"逻辑一起工作
-  useEffect(() => {
-    if (micMuted && botStatus === 'started' && isBotOperatorRef.current) {
-      console.log('[App] 麦克风已静音，自动停止 AI 录制');
-      handleStopBot();
-    }
-    // 只在意 micMuted 翻转为 true 的瞬间；handleStopBot 内部已有 started/operator 校验
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [micMuted, botStatus]);
+  // 麦克风静音状态只控制"本端是否上传 audio_chunk"，不再触发 AI Bot 启停
+  // （AI 开关由主持人独立控制；参会者静音也只是过滤自己的数据）
 
   if (!joined) {
     return (
@@ -584,7 +594,7 @@ export default function App() {
           onIncomingMessage={handleIncomingMessage}
           onOutgoingMessage={handleOutgoingMessage}
           onVideoConferenceLeft={handleVideoConferenceLeft}
-          onMicMuteChange={setMicMuted}
+          onMicMuteChange={() => { /* 静音状态已下沉到 audioCapture / ParticipantAudioReceiver 内部处理 */ }}
           onTrackAdded={handleTrackAdded}
           onTrackRemoved={handleTrackRemoved}
           onParticipantsChange={setParticipantsCount}
@@ -602,7 +612,6 @@ export default function App() {
         onStopBot={handleStopBot}
         botStatus={botStatus}
         audioState={audioState}
-        micMuted={micMuted}
         remoteCaptureCount={remoteCaptureCount}
         remotePartial={remotePartial}
         participantsCount={participantsCount}

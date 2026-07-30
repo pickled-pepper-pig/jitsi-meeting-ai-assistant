@@ -269,6 +269,16 @@ Content-Type: application/json
 GET http://localhost:8082/api/audit-logs?roomId=room-a
 ```
 
+### 会议历史消息
+
+```bash
+# 拉取指定房间的所有历史消息（chat / summary / transcript）
+# 支持 since_seq 增量参数
+GET http://localhost:8082/api/meetings/{roomId}/messages?token=your-jwt-token[&since_seq=0]
+```
+
+新加入者通过此接口 + WS `room_state_snapshot` 双重兜底拉到进入前的会议纪要。
+
 ### Meeting Agent Bot 管理
 
 仅主持人 token 可调用。Bot JWT 由服务端重签为 "AI Assistant" 身份，不依赖调用方 token。
@@ -319,9 +329,10 @@ Bot 侧 PCM 通过独立 WebSocket 路径 `/ws/recorder/{meeting_id}` 上行，�
 
 | 服务端事件 | 说明 |
 |-----------|------|
-| `joined` | 确认加入，返回 lastSeq |
+| `joined` | 确认加入，返回 lastSeq，并立即推送 `ai_bot_status` + `room_state_snapshot` |
 | `chat` | 广播聊天消息 |
 | `summary` | 广播会议总结 |
+| `room_state_snapshot` | 新加入者收到的一次性房间历史快照（含 chat/summary/transcript 全部消息） |
 | `synced` | 返回错过的消息列表 |
 | `status` | 状态更新 |
 | `error` | 错误提示 |

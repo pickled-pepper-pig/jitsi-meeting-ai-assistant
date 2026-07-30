@@ -18,7 +18,6 @@ interface SidebarProps {
   onStopBot?: () => void;
   botStatus?: 'idle' | 'starting' | 'started' | 'stopping';
   audioState?: AudioCaptureState | null;
-  micMuted?: boolean;
   remoteCaptureCount?: number;
   // 旁观者侧收到的实时 partial 转写（来自操作者的 ASR）
   remotePartial?: { text: string; participant: string } | null;
@@ -38,7 +37,6 @@ export function Sidebar({
   onStopBot,
   botStatus = 'idle',
   audioState,
-  micMuted = false,
   remoteCaptureCount = 0,
   remotePartial = null,
   participantsCount = 0,
@@ -60,7 +58,19 @@ export function Sidebar({
   return (
     <div className="sidebar">
       <div className="sidebar-header">
-        <h3>会议纪要</h3>
+        <div className="sidebar-title">
+          <h3>会议纪要</h3>
+          {onCopyInvite && (
+            <button
+              className="invite-icon-btn"
+              onClick={onCopyInvite}
+              title={inviteCopied ? '邀请链接已复制' : '复制邀请链接'}
+              aria-label="复制邀请链接"
+            >
+              {inviteCopied ? '✓' : '📋'}
+            </button>
+          )}
+        </div>
         <div className="header-right">
           <span className={`connection-status ${statusClass[connectionStatus]}`}>
             <span className="status-dot"></span>
@@ -71,40 +81,24 @@ export function Sidebar({
 
       <ComplianceNotice visible={aiEnabled} />
 
-      {onCopyInvite && (
-        <div className="invite-section">
-          <button className="invite-btn" onClick={onCopyInvite}>
-            {inviteCopied ? '✓ 已复制链接' : '📋 复制邀请链接'}
-          </button>
-        </div>
-      )}
-
       <div className="bot-section">
         {isModerator ? (
           (() => {
-            // 处于"未启动"状态且用户麦克风已静音时，禁用开启按钮 + 显示 tooltip
-            const blockedByMute = botStatus === 'idle' && micMuted;
-            const tipText = blockedByMute
-              ? '请先取消 Jitsi 工具栏的麦克风静音，再开启 AI 语音识别'
-              : undefined;
-            const isDisabled = botStatus === 'starting' || botStatus === 'stopping' || blockedByMute;
+            // AI 按钮只受主持人权限 + 当前状态控制，不再受麦克风静音影响
+            // 麦克风静音只是"本端是否上传音频"的开关，不影响 AI 功能开关
+            const isDisabled = botStatus === 'starting' || botStatus === 'stopping';
             return (
               <>
                 <button
-                  className={`bot-btn ${botStatus === 'started' ? 'bot-active' : ''} ${botStatus === 'stopping' ? 'bot-stopping' : ''} ${blockedByMute ? 'bot-blocked' : ''}`}
+                  className={`bot-btn ${botStatus === 'started' ? 'bot-active' : ''} ${botStatus === 'stopping' ? 'bot-stopping' : ''}`}
                   onClick={botStatus === 'started' ? onStopBot : onStartBot}
                   disabled={isDisabled}
-                  title={tipText}
-                  aria-disabled={isDisabled || undefined}
                 >
                   {botStatus === 'idle' && '🎙️ 开启 AI 语音识别'}
                   {botStatus === 'starting' && '⏳ 连接中...'}
                   {botStatus === 'started' && '⏹ 停止录制'}
                   {botStatus === 'stopping' && '⏳ 停止中...'}
                 </button>
-                {blockedByMute && (
-                  <p className="bot-tip bot-tip-warn">麦克风已静音，请先在 Jitsi 工具栏取消静音</p>
-                )}
                 {audioState && audioState.status === 'recording' && (
                   <div className="audio-status">
                     <div className="audio-status-item">
@@ -130,7 +124,11 @@ export function Sidebar({
                     </div>
                   </div>
                 )}
-                <p className="bot-tip">点击后开始采集音频并发送给 ASR 服务</p>
+                <p className="bot-tip">
+                  {botStatus === 'idle'
+                    ? '点击后开始 AI 实时转写'
+                    : '正在转写中，点击按钮可随时停止'}
+                </p>
               </>
             );
           })()
@@ -145,12 +143,7 @@ export function Sidebar({
                 <span>AI 正在转写中</span>
               </div>
               <p className="bot-tip">由会议主持人开启，转写内容会实时显示在下方面板</p>
-              <div className="audio-status">
-                <div className="audio-status-item">
-                  <span className="audio-status-label">参会者:</span>
-                  <span className="audio-status-value">{participantsCount} 人</span>
-                </div>
-              </div>
+              <p className="bot-tip"><strong>参会者:</strong> <span className="participants-count-value">{participantsCount}</span> 人</p>
             </div>
           ) : null
         )}

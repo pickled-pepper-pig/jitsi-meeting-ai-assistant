@@ -129,20 +129,31 @@ class WebSocketGatewayServer:
 
         logger.info(f"[Aggregator] {msg_type}: participant={message.get('participant_name')}, text='{text}'")
 
-        # 广播到房间所有非操作者的 WebSocket 客户端（旁观者）
-        # 操作者（开启 AI 的人）已经通过自己的 AudioCaptureService WebSocket 拿到 transcript，
-        # 再从这条路径推一次会导致操作者侧重复显示。
-        # 注意：操作者同时持有 useWebSocket（join 房间）+ AudioCaptureService（create_session）两条连接，
-        # 两条连接都属于同一个 userId，所以这里按 userId 过滤更稳。
+        # transcript_final 持久化到 meeting_state，后加入的用户可以拉到历史
+        # partial 不持久化（实时显示用，会被后续 final 覆盖，持久化会导致重复）
+        if msg_type == "transcript_final" and text:
+            try:
+                add_message(meeting_id, {
+                    "sender": message.get("participant_name") or "AI 转写",
+                    "content": text,
+                    "timestamp": message.get("timestamp") or int(time.time() * 1000),
+                    "type": "transcript",
+                    "participant_id": message.get("participant_id"),
+                    "session_id": message.get("session_id"),
+                })
+            except Exception as e:
+                logger.error(f"[Aggregator] persist transcript_final error: {e}")
+
+        # 广播到房间所有 WebSocket 客户端
+        # 操作者本人会同时通过 audioCapture ws 和 useWebSocket ws 收到 transcript，
+        # 但 App.tsx 的 meeting_transcript 处理已有去重逻辑（同 speaker+内容+1s），
+        # 所以这里不需要按 user_id 跳过操作者——跳过反而会让操作者收不到 transcript。
         room_clients = self._rooms.get(meeting_id, set())
-        operator_user_id = self._room_audio_operator_user.get(meeting_id)
         if room_clients:
             msg = json.dumps(message)
             for ws_id in room_clients:
                 client = self._clients.get(ws_id)
                 if not client:
-                    continue
-                if operator_user_id and client.get("user_id") == operator_user_id:
                     continue
                 try:
                     asyncio.run_coroutine_threadsafe(
@@ -245,6 +256,15 @@ class WebSocketGatewayServer:
             await self._send(ws_id, {"type": "joined", "roomId": room_id, "lastSeq": meeting["seq"]})
             # 补发房间当前的 AI Bot 状态（让中途加入的旁观者也能看到是否在录音）
             await self._send(ws_id, {"type": "ai_bot_status", **get_ai_bot(room_id)})
+            # 补发房间历史消息快照（chat + summary），让新加入的用户看到进入之前的会议纪要
+            # messages 已带 seq，客户端可直接灌入并去重
+            await self._send(ws_id, {
+                "type": "room_state_snapshot",
+                "roomId": room_id,
+                "lastSeq": meeting["seq"],
+                "messages": list(meeting.get("messages", [])),
+                "participants": list(meeting.get("participants", [])),
+            })
             audit_log("join", user_id, room_id, f"role={role}")
             logger.info(f"[WS] {user_id} joined {room_id} ({role})")
 
@@ -288,12 +308,22 @@ class WebSocketGatewayServer:
             def _do():
                 loop = asyncio.new_event_loop()
                 summary = loop.run_until_complete(generate_summary(room_id, messages))
+                # 空消息时 generate_summary 返回占位文案 "本次会议暂无聊天记录。"
+                # 不持久化也不广播，避免下一个人加入看到一条无意义的 summary。
+                if not messages or summary == "本次会议暂无聊天记录。":
+                    asyncio.run_coroutine_threadsafe(
+                        self._send(ws_id, {"type": "status", "message": "本次会议暂无聊天记录，已省略总结。"}),
+                        self._loop,
+                    )
+                    return
+                # summary 也走 add_message，自动获得 seq + 持久化，
+                # 让后加入的用户能通过 sync/snapshot 拉到历史总结
                 summary_msg = add_message(room_id, {
                     "sender": "AI 助手", "content": summary,
                     "timestamp": int(time.time() * 1000), "type": "summary",
                 })
                 asyncio.run_coroutine_threadsafe(
-                    self._broadcast(room_id, {"type": "summary", "roomId": room_id, "summary": summary, "timestamp": int(time.time() * 1000)}),
+                    self._broadcast(room_id, {"type": "summary", "roomId": room_id, "summary": summary, "timestamp": summary_msg["timestamp"], "seq": summary_msg["seq"]}),
                     self._loop,
                 )
                 asyncio.run_coroutine_threadsafe(
@@ -316,15 +346,28 @@ class WebSocketGatewayServer:
     # -----------------------------------------------------------------------
     async def _handle_audio(self, ws_id: str, msg: dict):
         action = msg["action"]
+        # 取当前 ws 的 client 元数据（含 room_id / user_id，由前序 join 设置）
+        client = self._clients.get(ws_id)
 
         if action == "create_session":
             session_id = msg.get("session_id") or str(uuid.uuid4())
-            meeting_id = msg.get("meeting_id", "default")
+            logger.info(f"[WS-DEBUG] create_session: ws_id={ws_id}, session_id={session_id}, client_room_id={client.get('room_id') if client else None}")
+            # 强制使用 ws client 已 join 的 room_id（不信任前端传的 meeting_id），
+            # 防止前端漏传/传错导致会议间串扰
+            if not client or not client.get("room_id"):
+                logger.info(f"[WS-DEBUG] create_session rejected: no room_id")
+                await self._send(ws_id, {
+                    "type": "error",
+                    "message": "未加入会议，无法开启 AI 语音识别",
+                })
+                return
+            meeting_id = client["room_id"]
             participant_id = msg.get("participant_id", "unknown")
             participant_name = msg.get("participant_name", "Unknown")
-            # 鉴权：只有主持人（moderator）能开 AI 语音识别
             token = msg.get("token", "")
+            # 鉴权：只有主持人（moderator）能开 AI 语音识别
             if not is_moderator(token):
+                logger.info(f"[WS-DEBUG] create_session rejected: not moderator")
                 audit_log("ai_bot_denied", participant_id, meeting_id, "非主持人尝试开启AI")
                 await self._send(ws_id, {
                     "type": "error",
@@ -347,16 +390,19 @@ class WebSocketGatewayServer:
                 self._rooms.setdefault(meeting_id, set()).add(ws_id)
                 # 记录房间级 AI 操作者的 userId：transcript 广播时跳过该 userId 的所有 ws
                 self._room_audio_operator_user[meeting_id] = participant_id
+                logger.info(f"[WS-DEBUG] create_session success: {session_id}, sending session_created")
                 await self._send(ws_id, {
                     "type": "session_created", "session_id": session.session_id,
                     "meeting_id": session.meeting_id,
                     "participant_id": session.participant_id,
                     "status": session.status.value,
                 })
+                logger.info(f"[WS-DEBUG] session_created sent")
                 # 房间级 AI Bot 状态：更新 + 广播给所有房间成员
                 bot_state = set_ai_bot(meeting_id, "started", participant_id)
                 await self._broadcast(meeting_id, {"type": "ai_bot_status", **bot_state})
             except Exception as e:
+                logger.exception(f"[WS-DEBUG] create_session exception: {e}")
                 await self._send(ws_id, {"type": "error", "message": str(e)})
 
         elif action == "audio_chunk":
@@ -412,22 +458,31 @@ class WebSocketGatewayServer:
         self.session_manager.close_session(session_id)
         self.transcript_service.unregister_websocket_client(meeting_id, ws_id)
         # 清理房间级 AI 操作者记录
-        # 注意：按 userId 清理，但只有当记录的 userId 仍指向本会话的操作者时才清，
-        # 避免 AI 重启时旧 userId 还在但 ws 已断开导致误清
-        # 这里只在 end_session 时清理（AI Bot 整体停止的场景）
-        if meeting_id in self._room_audio_operator_user:
-            del self._room_audio_operator_user[meeting_id]
+        # 关键：必须按 session_id 查 session 的 participant_id，再判断是否清标记，
+        # 避免「A 房间有 A1、A2 两个参会者，A1 end_session 时把 A2 的标记也清了」。
+        # 修复：只有当记录的 userId 仍指向本会话的 participantId 时才清
+        try:
+            session = self.session_manager.get_session(session_id)
+            if session and meeting_id in self._room_audio_operator_user:
+                if self._room_audio_operator_user[meeting_id] == session.participant_id:
+                    del self._room_audio_operator_user[meeting_id]
+        except Exception:
+            pass  # 静默失败，不影响清理
         # 房间级 AI Bot 状态：恢复 idle + 广播
+        # ⚠️ 此函数在 asyncio.to_thread 线程池里执行，
+        # 必须用 self._loop（主事件循环），不能用 asyncio.get_event_loop()
+        # （后者在 Python 3.12+ 已废弃并在新线程里会返回新 loop / 报错）
         bot_state = set_ai_bot(meeting_id, "idle", None)
         try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
+            if self._loop and self._loop.is_running():
                 asyncio.run_coroutine_threadsafe(
                     self._broadcast(meeting_id, {"type": "ai_bot_status", **bot_state}),
-                    loop,
+                    self._loop,
                 )
-        except RuntimeError:
-            pass  # 无事件循环（重启时）
+            else:
+                logger.warning("[finalize] main event loop not available, ai_bot_status idle broadcast skipped")
+        except Exception as e:
+            logger.error(f"[finalize] broadcast ai_bot_status idle error: {e}")
 
     async def _handle_audio_binary(self, ws_id: str, data: bytes):
         pass  # 备选：二进制音频

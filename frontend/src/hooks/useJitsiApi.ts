@@ -230,6 +230,14 @@ export function useJitsiApi(options: JitsiOptions, callbacks: JitsiEventCallback
           callbacksRef.current.onOutgoingMessage?.(e.message || e.text || '');
         });
 
+        api.addListener('videoConferenceJoined', () => {
+          // 我已加入会议：此时 getParticipantsInfo() 才会返回房间内所有人
+          // （ready 只代表 IFrame 加载完成，不代表已 join 房间）
+          if (disposed) return;
+          setTimeout(refreshParticipantsCount, 300);
+          setTimeout(refreshParticipantsCount, 1500);  // 兜底二次刷新
+        });
+
         api.addListener('videoConferenceLeft', () => {
           callbacksRef.current.onVideoConferenceLeft?.();
         });

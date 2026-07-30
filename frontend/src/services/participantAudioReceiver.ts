@@ -14,6 +14,7 @@ export interface CaptureState {
   chunksCount: number;
   startedAt: number | null;
   audioLevel: number;
+  muted: boolean;          // 参会者是否静音（来自 MediaStreamTrack.muted / mute 事件）
 }
 
 export type CaptureEventListener = (state: CaptureState) => void;
@@ -79,6 +80,7 @@ export class ParticipantAudioReceiver {
         chunksCount: 0,
         startedAt: null,
         audioLevel: 0,
+        muted: false,
       };
     }
     return {
@@ -88,6 +90,7 @@ export class ParticipantAudioReceiver {
       chunksCount: cap.chunks.length,
       startedAt: cap.startedAt,
       audioLevel: cap.audioLevel,
+      muted: cap.muted,
     };
   }
 
@@ -135,6 +138,7 @@ export class ParticipantAudioReceiver {
       chunks: [],
       startedAt: Date.now(),
       audioLevel: 0,
+      muted: mediaTrack.muted,
       sendToBackend: options.sendToBackend ?? false,
       ws: null,
       sessionId: null,
@@ -168,6 +172,13 @@ export class ParticipantAudioReceiver {
       session.chunks.push(pcm16);
       this.totalChunks++;
 
+      // 参会者已静音 → 不上传 audio_chunk（避免无效带宽 / 防止静音帧污染 ASR）
+      // 缓存仍保留，便于 wav 落盘/调试
+      if (session.muted || mediaTrack.muted) {
+        this.notifyState(info.participantId);
+        return;
+      }
+
       if (session.sendToBackend && session.ws?.readyState === WebSocket.OPEN) {
         session.ws.send(
           JSON.stringify({
@@ -190,7 +201,24 @@ export class ParticipantAudioReceiver {
     processor.connect(muteGain);
     muteGain.connect(this.audioContext.destination);
 
+    // 监听媒体轨道 mute 状态（参会者在 Jitsi 工具栏点静音时会同步到 MediaStreamTrack）
+    const onTrackMute = () => {
+      session.muted = true;
+      console.log(`[PAR] ${info.participantName} 已静音，暂停上传`);
+      this.notifyState(info.participantId);
+    };
+    const onTrackUnmute = () => {
+      session.muted = false;
+      console.log(`[PAR] ${info.participantName} 取消静音，恢复上传`);
+      this.notifyState(info.participantId);
+    };
+    mediaTrack.addEventListener('mute', onTrackMute);
+    mediaTrack.addEventListener('unmute', onTrackUnmute);
+
     mediaTrack.addEventListener('ended', () => {
+      // detach mute 监听
+      mediaTrack.removeEventListener('mute', onTrackMute);
+      mediaTrack.removeEventListener('unmute', onTrackUnmute);
       this.stopCapture(info.participantId).catch(() => {});
     });
 
@@ -254,54 +282,68 @@ export class ParticipantAudioReceiver {
   async connectBackendForSession(
     participantId: string,
     wsUrl: string,
+    token: string = '',  // 主持人 token（远程参会者的会话归属主持人；用于后端 join 鉴权）
   ): Promise<void> {
     const cap = this.captures.get(participantId);
     if (!cap) throw new Error(`session not found: ${participantId}`);
     if (cap.ws && cap.ws.readyState === WebSocket.OPEN) return;  // 已连
 
     return new Promise((resolve, reject) => {
-      const ws = new WebSocket(wsUrl);
-      const sessionId = `session-${Date.now()}-${participantId}`;
+    const ws = new WebSocket(wsUrl);
+    const sessionId = `session-${Date.now()}-${participantId}`;
 
-      const cleanup = () => {
-        ws.removeEventListener('message', onMsg);
-        ws.removeEventListener('error', onErr);
-      };
+    const cleanup = () => {
+      ws.removeEventListener('message', onMsg);
+      ws.removeEventListener('error', onErr);
+    };
 
-      const onMsg = (event: MessageEvent) => {
-        try {
-          const msg = JSON.parse(event.data);
-          if (msg.type === 'session_created' && msg.session_id === sessionId) {
-            cleanup();
-            cap.ws = ws;
-            cap.sessionId = sessionId;
-            console.log(`[PAR] Backend session created: ${sessionId} for ${cap.info.participantName}`);
-            resolve();
-          } else if (msg.type === 'error') {
-            cleanup();
-            reject(new Error(msg.message || 'create_session failed'));
-          }
-        } catch {}
-      };
+    let joined = false;
 
-      const onErr = () => {
-        cleanup();
-        reject(new Error('WebSocket connection error'));
-      };
+    const onMsg = (event: MessageEvent) => {
+      try {
+        const msg = JSON.parse(event.data);
+        // 同一 ws 必须先 join 拿到 client.room_id，再 create_session
+        if (msg.type === 'joined' && !joined) {
+          joined = true;
+          ws.send(JSON.stringify({
+            action: 'create_session',
+            session_id: sessionId,
+            meeting_id: cap.meetingId,
+            participant_id: cap.info.participantId,
+            participant_name: cap.info.participantName,
+            token: '',
+          }));
+          return;
+        }
+        if (msg.type === 'session_created' && msg.session_id === sessionId) {
+          cleanup();
+          cap.ws = ws;
+          cap.sessionId = sessionId;
+          console.log(`[PAR] Backend session created: ${sessionId} for ${cap.info.participantName}`);
+          resolve();
+        } else if (msg.type === 'error') {
+          cleanup();
+          reject(new Error(msg.message || 'create_session failed'));
+        }
+      } catch {}
+    };
 
-      ws.addEventListener('message', onMsg);
-      ws.addEventListener('error', onErr);
+    const onErr = () => {
+      cleanup();
+      reject(new Error('WebSocket connection error'));
+    };
 
-      ws.onopen = () => {
-        ws.send(JSON.stringify({
-          action: 'create_session',
-          session_id: sessionId,
-          meeting_id: cap.meetingId,
-          participant_id: cap.info.participantId,
-          participant_name: cap.info.participantName,
-          token: '',
-        }));
-      };
+    ws.addEventListener('message', onMsg);
+    ws.addEventListener('error', onErr);
+
+    ws.onopen = () => {
+      // 先 join 同一 ws（后端用 client.room_id 校验 create_session 归属）
+      ws.send(JSON.stringify({
+        action: 'join',
+        roomId: cap.meetingId,
+        token,
+      }));
+    };
 
       ws.onclose = () => {
         console.log(`[PAR] ws closed for ${cap.info.participantName}`);
@@ -382,6 +424,7 @@ interface CaptureSession {
   chunks: Int16Array[];
   startedAt: number;
   audioLevel: number;
+  muted: boolean;          // 该参会者当前是否静音（true 时不上传 audio_chunk）
   sendToBackend: boolean;
   ws: WebSocket | null;
   sessionId: string | null;

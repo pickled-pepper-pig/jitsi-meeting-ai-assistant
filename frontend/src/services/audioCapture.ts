@@ -45,6 +45,10 @@ export class AudioCaptureService {
 
     try {
       await this.connectWebSocket();
+      // 先 join 同一个 ws 连接（后端用 client.room_id 校验会话归属），
+      // 再 create_session。audioCapture 是 useWebSocket 之外的独立 ws，
+      // 所以这里也要走一遍 join 流程，否则后端会因 room_id 为空拒绝 create_session。
+      await this.joinRoom();
       await this.createSession();
       await this.startLocalCapture();
 
@@ -55,6 +59,50 @@ export class AudioCaptureService {
       this.updateState({ status: 'idle' });
       throw err;
     }
+  }
+
+  private joinRoom(): Promise<void> {
+    return new Promise((resolve, reject) => {
+      if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+        reject(new Error('WebSocket not connected'));
+        return;
+      }
+
+      const onMessage = (event: MessageEvent) => {
+        try {
+          const msg = JSON.parse(event.data);
+          console.log(`[AudioCapture] joinRoom recv msg.type=${msg.type}`);
+          if (msg.type === 'joined') {
+            this.ws!.removeEventListener('message', onMessage);
+            resolve();
+          } else if (msg.type === 'error') {
+            this.ws!.removeEventListener('message', onMessage);
+            reject(new Error(msg.message));
+          }
+        } catch {}
+      };
+
+      this.ws!.addEventListener('message', onMessage);
+
+      const payload = JSON.stringify({
+        action: 'join',
+        roomId: this.config.roomId,
+        token: this.config.token || '',
+      });
+      console.log(`[AudioCapture] joinRoom sending (roomId=${this.config.roomId})`);
+      try {
+        this.ws!.send(payload);
+      } catch (e) {
+        this.ws!.removeEventListener('message', onMessage);
+        reject(new Error(`join ws.send failed: ${e}`));
+        return;
+      }
+
+      setTimeout(() => {
+        this.ws!.removeEventListener('message', onMessage);
+        reject(new Error('Join room timeout'));
+      }, 5000);
+    });
   }
 
   private connectWebSocket(): Promise<void> {
@@ -99,6 +147,7 @@ export class AudioCaptureService {
     await new Promise(r => setTimeout(r, 1000));
     try {
       await this.connectWebSocket();
+      await this.joinRoom();
       await this.createSession();
       this.reconnectAttempts = 0;
       this.updateState({ status: 'recording' });
@@ -118,10 +167,12 @@ export class AudioCaptureService {
 
       const sessionId = `session-${Date.now()}`;
       this.sessionId = sessionId;
+      console.log(`[AudioCapture] createSession start: sessionId=${sessionId}, ws.readyState=${this.ws.readyState}`);
 
       const onMessage = (event: MessageEvent) => {
         try {
           const msg = JSON.parse(event.data);
+          console.log(`[AudioCapture] createSession recv msg.type=${msg.type}, session_id=${msg.session_id}`);
           if (msg.type === 'session_created' && msg.session_id === sessionId) {
             this.ws!.removeEventListener('message', onMessage);
             resolve();
@@ -129,19 +180,31 @@ export class AudioCaptureService {
             this.ws!.removeEventListener('message', onMessage);
             reject(new Error(msg.message));
           }
-        } catch {}
+        } catch (e) {
+          console.warn(`[AudioCapture] createSession parse error:`, e);
+        }
       };
 
       this.ws.addEventListener('message', onMessage);
 
-      this.ws.send(JSON.stringify({
+      const payload = JSON.stringify({
         action: 'create_session',
         session_id: sessionId,
         meeting_id: this.config.roomId,
         participant_id: this.config.participantId,
         participant_name: this.config.participantName,
         token: this.config.token || '',
-      }));
+      });
+      console.log(`[AudioCapture] createSession sending payload (len=${payload.length})`);
+      try {
+        this.ws.send(payload);
+        console.log(`[AudioCapture] createSession sent OK`);
+      } catch (e) {
+        console.error(`[AudioCapture] createSession ws.send error:`, e);
+        this.ws!.removeEventListener('message', onMessage);
+        reject(new Error(`ws.send failed: ${e}`));
+        return;
+      }
 
       setTimeout(() => {
         this.ws!.removeEventListener('message', onMessage);

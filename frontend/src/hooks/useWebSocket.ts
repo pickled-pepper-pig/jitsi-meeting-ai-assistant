@@ -75,6 +75,17 @@ export function useWebSocket(options: UseWebSocketOptions) {
         break;
       }
 
+      // 新用户加入时服务端一次性补发的房间历史快照（含 chat / summary 等所有消息）
+      case 'room_state_snapshot': {
+        const msgs = (data.messages as ChatMessage[]) || [];
+        if (msgs.length > 0) {
+          const maxSeq = Math.max(...msgs.map(m => m.seq));
+          if (maxSeq > lastSeqRef.current) lastSeqRef.current = maxSeq;
+        }
+        message = { type: 'synced', messages: msgs };
+        break;
+      }
+
       case 'error':
       case 'status':
         message = { type: 'error', message: data.message };

@@ -7,7 +7,7 @@ export interface ChatMessage {
   sender: string;
   content: string;
   timestamp: number;
-  type: 'text' | 'system' | 'summary';
+  type: 'text' | 'system' | 'summary' | 'transcript';
 }
 
 /**

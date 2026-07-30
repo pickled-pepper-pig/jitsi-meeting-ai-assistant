@@ -21,6 +21,7 @@ from app.meeting_state import (
     add_asr_session,
     claim_moderator,
     get_first_moderator,
+    get_ai_bot,
 )
 from app.audit_log import get_logs as get_audit_logs
 
@@ -180,6 +181,37 @@ def get_meeting_moderator(room_id: str):
         "roomId": room_id,
         "moderatorId": moderator_id,
         "moderatorName": meeting.get("firstModeratorName"),
+    })
+
+
+@api_bp.route("/api/meetings/<room_id>/messages", methods=["GET"])
+def get_meeting_messages(room_id: str):
+    """获取房间的历史消息（chat + summary）
+
+    用于：
+      - 刷新页面后通过 HTTP 兜底加载历史纪要（不依赖 WebSocket）
+      - 新用户加入会议后即可看到进入之前的全部消息
+
+    可选参数：since_seq（只返回 seq 大于该值的消息，用于增量同步）
+    """
+    token = request.args.get("token", "")
+    if not token:
+        return jsonify({"error": "token 必填"}), 400
+    payload = verify_token(token)
+    if not payload or payload.get("room") != room_id:
+        return jsonify({"error": "token 无效或与房间不匹配"}), 401
+
+    meeting = get_or_create_meeting(room_id)
+    messages = list(meeting.get("messages", []))
+    since_seq = int(request.args.get("since_seq", "0"))
+    if since_seq > 0:
+        messages = [m for m in messages if m.get("seq", 0) > since_seq]
+
+    return jsonify({
+        "roomId": room_id,
+        "lastSeq": meeting.get("seq", 0),
+        "messages": messages,
+        "aiBot": get_ai_bot(room_id),
     })
 
 

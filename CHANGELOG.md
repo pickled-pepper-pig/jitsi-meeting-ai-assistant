@@ -2,6 +2,30 @@
 
 本项目的所有重要变更都会记录在此文件中。
 
+## [1.6.0] - 2026-07-30
+
+### feat（新功能）
+- 会议纪要历史共享：新加入者通过 HTTP `/api/meetings/{roomId}/messages` + WS `room_state_snapshot` 双重兜底拉到之前的 chat / summary / transcript 历史，所有用户看到同一份内容
+- 静音与 AI 开关解耦：Jitsi 工具栏的静音按钮只控制本端音频上传，主持人可静音后仍点 AI；其他参会者静音由 `ParticipantAudioReceiver` 监听 `MediaStreamTrack.mute` 事件自动暂停上传
+- 多路远程音频接收器静音联动：`CaptureSession.muted` 状态由 track mute/unmute 事件驱动，静音时短路 audio_chunk 上传
+- transcript 持久化：`transcript_final` 自动写入 `meeting_state`（`type: "transcript"`），让后加入者也能看到历史转写
+- 参会者人数实时刷新：监听 `videoConferenceJoined` 事件，延迟 300ms/1500ms 两次兜底 `refreshParticipantsCount`
+- 邀请链接图标化：放在 sidebar header「会议纪要」右侧，hover 提示「复制邀请链接」，点击后切到 ✓
+- 旁观者视图 UI 紧凑化：AI 状态 + 主持人说明合并为一行 bot-tip，参会者人数单独一行（数字红色加粗）
+
+### fix（修复）
+- 多房间隔离加固：`_handle_audio` 强制从 `client.room_id` 取会话归属，前端漏传 meeting_id 直接报错而非兜底到 `default` 房间
+- end_session 操作者标记按 session_id 校验清理，修复「A1 end_session 误清 A2 的标记」
+- `_finalize_session_blocking` 用主事件循环 `self._loop` 调度 `ai_bot_status idle` 广播（原 `asyncio.get_event_loop()` 在 Python 3.12+ 线程池里返回新 loop，导致旁观者收不到「停止 AI」状态）
+- `_handle_audio` 取 `client = self._clients.get(ws_id)`，修复 `NameError: name 'client' is not defined` 导致 create_session 失败、ws 直接关闭
+- 取消 transcript 广播按 user_id 跳过操作者的逻辑：操作者本端通过 audioCapture ws 收 transcript，跳过反而让其收不到转写结果；前端 `meeting_transcript` 已有去重逻辑兜底
+- 空 summary 不再持久化：`summarize` 在无消息时不再生成 `本次会议暂无聊天记录` 占位消息，新加入者不会看到无意义的「📋 会议总结」
+- `audioCapture` / `ParticipantAudioReceiver` 在 ws 建连后先发 join 再发 create_session，避免后端 create_session 校验失败
+
+### chore（维护）
+- `ChatMessage.type` 类型扩展为 `'text' | 'system' | 'summary' | 'transcript'`
+- 旁观者视图移除 `bot-view-only-indicator` 容器与旧 `.invite-section`/`.invite-btn` 样式
+
 ## [1.5.0] - 2026-07-30
 
 ### feat（新功能）
