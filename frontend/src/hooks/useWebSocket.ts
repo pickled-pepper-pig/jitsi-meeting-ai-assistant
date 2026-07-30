@@ -80,7 +80,45 @@ export function useWebSocket(options: UseWebSocketOptions) {
         message = { type: 'error', message: data.message };
         break;
 
-      // 音频相关消息（透传，前端暂不处理）
+      // 房间级 AI Bot 状态：旁观者通过此消息知道自己能不能控制 AI
+      case 'ai_bot_status':
+        message = {
+          type: 'ai_bot_status',
+          roomId: data.roomId,
+          status: data.status,
+          aiEnabled: !!data.aiEnabled,
+          startedBy: data.startedBy ?? null,
+        };
+        break;
+
+      // 旁观者收到操作者产生的 final 转写（后端 ws_server 广播）
+      // 转为统一 meeting_transcript 消息给 App.tsx
+      case 'transcript_final':
+        message = {
+          type: 'meeting_transcript',
+          text: data.text || '',
+          participant_id: data.participant_id,
+          participant_name: data.participant_name,
+          timestamp: data.timestamp,
+          meeting_id: data.meeting_id,
+          session_id: data.session_id,
+        };
+        break;
+
+      // 旁观者收到操作者产生的 partial 转写（实时显示）
+      case 'transcript_partial':
+        message = {
+          type: 'meeting_transcript_partial',
+          text: data.text || '',
+          participant_id: data.participant_id,
+          participant_name: data.participant_name,
+          timestamp: data.timestamp,
+          meeting_id: data.meeting_id,
+          session_id: data.session_id,
+        };
+        break;
+
+      // 这些是 AudioCaptureService 自己处理的消息，旁观者连接不应该收到
       case 'transcript':
       case 'session_created':
       case 'audio_received':

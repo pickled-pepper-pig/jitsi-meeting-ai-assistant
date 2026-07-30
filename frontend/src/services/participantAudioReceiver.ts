@@ -102,7 +102,7 @@ export class ParticipantAudioReceiver {
   async startCapture(
     mediaTrack: MediaStreamTrack,
     info: ParticipantTrackInfo,
-    options: { sendToBackend?: boolean } = {},
+    options: { sendToBackend?: boolean; backendWsUrl?: string; meetingId?: string } = {},
   ): Promise<void> {
     if (!this.isInitialized || !this.audioContext) {
       throw new Error('ParticipantAudioReceiver 未初始化');
@@ -138,6 +138,7 @@ export class ParticipantAudioReceiver {
       sendToBackend: options.sendToBackend ?? false,
       ws: null,
       sessionId: null,
+      meetingId: options.meetingId || '',
     };
 
     processor.onaudioprocess = (e: AudioProcessingEvent) => {
@@ -209,12 +210,21 @@ export class ParticipantAudioReceiver {
     } catch {}
 
     if (cap.sendToBackend && cap.ws?.readyState === WebSocket.OPEN && cap.sessionId) {
-      cap.ws.send(
-        JSON.stringify({
-          action: 'end_session',
-          session_id: cap.sessionId,
-        }),
-      );
+      try {
+        cap.ws.send(
+          JSON.stringify({
+            action: 'end_session',
+            session_id: cap.sessionId,
+          }),
+        );
+      } catch {}
+    }
+
+    // 关闭该 session 的独立 ws 连接
+    if (cap.ws) {
+      try {
+        cap.ws.close();
+      } catch {}
     }
 
     try {
@@ -235,6 +245,72 @@ export class ParticipantAudioReceiver {
 
     this.captures.delete(participantId);
     this.notifyState(participantId);
+  }
+
+  /**
+   * 给指定 session 启动一个独立的后端 ws 连接，并发 create_session
+   * 每个参会者一个 ws + 一个 session，独立 ASR 识别
+   */
+  async connectBackendForSession(
+    participantId: string,
+    wsUrl: string,
+  ): Promise<void> {
+    const cap = this.captures.get(participantId);
+    if (!cap) throw new Error(`session not found: ${participantId}`);
+    if (cap.ws && cap.ws.readyState === WebSocket.OPEN) return;  // 已连
+
+    return new Promise((resolve, reject) => {
+      const ws = new WebSocket(wsUrl);
+      const sessionId = `session-${Date.now()}-${participantId}`;
+
+      const cleanup = () => {
+        ws.removeEventListener('message', onMsg);
+        ws.removeEventListener('error', onErr);
+      };
+
+      const onMsg = (event: MessageEvent) => {
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg.type === 'session_created' && msg.session_id === sessionId) {
+            cleanup();
+            cap.ws = ws;
+            cap.sessionId = sessionId;
+            console.log(`[PAR] Backend session created: ${sessionId} for ${cap.info.participantName}`);
+            resolve();
+          } else if (msg.type === 'error') {
+            cleanup();
+            reject(new Error(msg.message || 'create_session failed'));
+          }
+        } catch {}
+      };
+
+      const onErr = () => {
+        cleanup();
+        reject(new Error('WebSocket connection error'));
+      };
+
+      ws.addEventListener('message', onMsg);
+      ws.addEventListener('error', onErr);
+
+      ws.onopen = () => {
+        ws.send(JSON.stringify({
+          action: 'create_session',
+          session_id: sessionId,
+          meeting_id: cap.meetingId,
+          participant_id: cap.info.participantId,
+          participant_name: cap.info.participantName,
+          token: '',
+        }));
+      };
+
+      ws.onclose = () => {
+        console.log(`[PAR] ws closed for ${cap.info.participantName}`);
+        if (cap.ws === ws) {
+          cap.ws = null;
+          cap.sessionId = null;
+        }
+      };
+    });
   }
 
   async stopAll(): Promise<void> {
@@ -309,4 +385,5 @@ interface CaptureSession {
   sendToBackend: boolean;
   ws: WebSocket | null;
   sessionId: string | null;
+  meetingId: string;
 }

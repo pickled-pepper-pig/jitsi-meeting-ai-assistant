@@ -12,6 +12,11 @@ interface JitsiMeetingProps {
   onIncomingMessage: (sender: string, message: string, timestamp: string) => void;
   onOutgoingMessage: (message: string) => void;
   onVideoConferenceLeft: () => void;
+  onMicMuteChange?: (muted: boolean) => void;
+  onTrackAdded?: (info: { participantId: string; participantName: string; track: MediaStreamTrack; kind: 'audio' | 'video'; local: boolean }) => void;
+  onTrackRemoved?: (info: { participantId: string; track: MediaStreamTrack; kind: 'audio' | 'video'; local: boolean }) => void;
+  // 参会者数量变化（含自己）
+  onParticipantsChange?: (count: number) => void;
 }
 
 export function JitsiMeeting({
@@ -23,12 +28,16 @@ export function JitsiMeeting({
   onIncomingMessage,
   onOutgoingMessage,
   onVideoConferenceLeft,
+  onMicMuteChange,
+  onTrackAdded,
+  onTrackRemoved,
+  onParticipantsChange,
 }: JitsiMeetingProps) {
   const [container, setContainer] = useState<HTMLElement | null>(null);
 
   const { isReady, error } = useJitsiApi(
     { domain, protocol, roomName, displayName, parentNode: container, token },
-    { onIncomingMessage, onOutgoingMessage, onVideoConferenceLeft }
+    { onIncomingMessage, onOutgoingMessage, onVideoConferenceLeft, onMicMuteChange, onTrackAdded, onTrackRemoved, onParticipantsChange },
   );
 
   return (

@@ -10,7 +10,7 @@ import ssl
 import threading
 import time
 import uuid
-from typing import Dict, Set
+from typing import Dict, Optional, Set
 
 import numpy as np
 from flask import Flask
@@ -42,12 +42,20 @@ logger = logging.getLogger(__name__)
 # 事件循环心跳时间戳：用于健康检查，暴露「事件循环是否被同步代码卡死」
 _loop_last_tick: float = 0.0
 
+# 主事件循环引用：供 Flask 后台线程通过 run_coroutine_threadsafe 调度协程
+_main_loop: Optional[asyncio.AbstractEventLoop] = None
+
 
 def get_loop_lag_ms() -> float:
     """返回事件循环心跳滞后毫秒数；心跳未启动时返回 -1"""
     if not _loop_last_tick:
         return -1.0
     return (time.time() - _loop_last_tick) * 1000
+
+
+def get_main_loop() -> Optional[asyncio.AbstractEventLoop]:
+    """返回主事件循环（供 Flask 线程调度协程用）"""
+    return _main_loop
 
 
 class WebSocketGatewayServer:
@@ -78,6 +86,9 @@ class WebSocketGatewayServer:
         # 会议 WebSocket 状态
         self._clients: Dict[str, dict] = {}      # ws_id -> {ws, room_id, user_id}
         self._rooms: Dict[str, Set[str]] = {}    # room_id -> set of ws_id
+        # 房间级 AI 操作者：room_id -> 开启 AI 的 userId
+        # transcript 推送时跳过该 userId 的所有 ws（操作者已从 AudioCaptureService 拿到）
+        self._room_audio_operator_user: Dict[str, str] = {}
 
         self.asr_worker.start()
         self.transcript_aggregator.set_callback(self._handle_aggregated_transcript)
@@ -118,21 +129,29 @@ class WebSocketGatewayServer:
 
         logger.info(f"[Aggregator] {msg_type}: participant={message.get('participant_name')}, text='{text}'")
 
-        # 广播到房间所有 WebSocket 客户端（开启 AI 的那一个）
+        # 广播到房间所有非操作者的 WebSocket 客户端（旁观者）
+        # 操作者（开启 AI 的人）已经通过自己的 AudioCaptureService WebSocket 拿到 transcript，
+        # 再从这条路径推一次会导致操作者侧重复显示。
+        # 注意：操作者同时持有 useWebSocket（join 房间）+ AudioCaptureService（create_session）两条连接，
+        # 两条连接都属于同一个 userId，所以这里按 userId 过滤更稳。
         room_clients = self._rooms.get(meeting_id, set())
+        operator_user_id = self._room_audio_operator_user.get(meeting_id)
         if room_clients:
             msg = json.dumps(message)
             for ws_id in room_clients:
                 client = self._clients.get(ws_id)
-                if client:
-                    try:
-                        asyncio.run_coroutine_threadsafe(
-                            client["ws"].send(msg), self._loop
-                        )
-                    except Exception as e:
-                        logger.error(f"Broadcast {msg_type} error: {e}")
+                if not client:
+                    continue
+                if operator_user_id and client.get("user_id") == operator_user_id:
+                    continue
+                try:
+                    asyncio.run_coroutine_threadsafe(
+                        client["ws"].send(msg), self._loop
+                    )
+                except Exception as e:
+                    logger.error(f"Broadcast {msg_type} error: {e}")
 
-        # 通过 Socket.IO 广播给同一房间的其他成员（未开启 AI 的旁观者）
+        # 兼容老的 Socket.IO 通道（如果仍有人在用）
         if msg_type == "transcript_final" and self._socketio:
             self._socketio.emit("meeting_transcript", message, room=meeting_id)
 
@@ -140,6 +159,18 @@ class WebSocketGatewayServer:
     # WebSocket handler
     # -----------------------------------------------------------------------
     async def _handler(self, websocket: ServerConnection):
+        # 路径分发：/ws/recorder/* → Bot recorder receiver，其他 → 会议/ASR
+        # websockets.asyncio.server API: path 在 websocket.request.path
+        path = ""
+        if hasattr(websocket, "request") and websocket.request:
+            path = websocket.request.path or ""
+        elif hasattr(websocket, "path"):
+            path = websocket.path or ""
+        if path.startswith("/ws/recorder/"):
+            from app.meeting_agent.audio.receiver import handle_recorder_ws
+            await handle_recorder_ws(websocket, path)
+            return
+
         ws_id = str(uuid.uuid4())
         self._clients[ws_id] = {"ws": websocket, "room_id": None, "user_id": None}
         logger.info(f"Client connected: {ws_id}")
@@ -212,6 +243,8 @@ class WebSocketGatewayServer:
             self._rooms.setdefault(room_id, set()).add(ws_id)
             meeting = get_or_create_meeting(room_id)
             await self._send(ws_id, {"type": "joined", "roomId": room_id, "lastSeq": meeting["seq"]})
+            # 补发房间当前的 AI Bot 状态（让中途加入的旁观者也能看到是否在录音）
+            await self._send(ws_id, {"type": "ai_bot_status", **get_ai_bot(room_id)})
             audit_log("join", user_id, room_id, f"role={role}")
             logger.info(f"[WS] {user_id} joined {room_id} ({role})")
 
@@ -312,6 +345,8 @@ class WebSocketGatewayServer:
                     meeting_id=meeting_id,
                 )
                 self._rooms.setdefault(meeting_id, set()).add(ws_id)
+                # 记录房间级 AI 操作者的 userId：transcript 广播时跳过该 userId 的所有 ws
+                self._room_audio_operator_user[meeting_id] = participant_id
                 await self._send(ws_id, {
                     "type": "session_created", "session_id": session.session_id,
                     "meeting_id": session.meeting_id,
@@ -376,6 +411,12 @@ class WebSocketGatewayServer:
             logger.error(f"End session error: {e}")
         self.session_manager.close_session(session_id)
         self.transcript_service.unregister_websocket_client(meeting_id, ws_id)
+        # 清理房间级 AI 操作者记录
+        # 注意：按 userId 清理，但只有当记录的 userId 仍指向本会话的操作者时才清，
+        # 避免 AI 重启时旧 userId 还在但 ws 已断开导致误清
+        # 这里只在 end_session 时清理（AI Bot 整体停止的场景）
+        if meeting_id in self._room_audio_operator_user:
+            del self._room_audio_operator_user[meeting_id]
         # 房间级 AI Bot 状态：恢复 idle + 广播
         bot_state = set_ai_bot(meeting_id, "idle", None)
         try:
@@ -472,7 +513,9 @@ class WebSocketGatewayServer:
 
         # WebSocket 主线程（启用 SSL，因为前端是 HTTPS 页面）
         async def _run():
+            global _main_loop
             self._loop = asyncio.get_running_loop()
+            _main_loop = self._loop
             asyncio.create_task(self._heartbeat())
 
             # SSL 配置：使用前端相同的证书（覆盖 192.0.36.227）

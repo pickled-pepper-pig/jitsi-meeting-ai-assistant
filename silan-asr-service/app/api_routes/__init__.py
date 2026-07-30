@@ -1,7 +1,8 @@
-# HTTP API 路由 - tokens / meetings / participants / audio sessions
+# HTTP API 路由 - tokens / meetings / participants / audio sessions / bot
 
 import logging
 import time
+import asyncio
 from flask import Blueprint, request, jsonify
 
 from app.auth import (
@@ -26,6 +27,16 @@ from app.audit_log import get_logs as get_audit_logs
 logger = logging.getLogger(__name__)
 
 api_bp = Blueprint("api", __name__)
+
+
+def _run_async(coro, timeout: float = 30.0):
+    """在主事件循环中调度协程并同步等待结果（供 Flask 路由调用 async 函数）"""
+    from app.audio_gateway.ws_server import get_main_loop
+    loop = get_main_loop()
+    if loop is None:
+        raise RuntimeError("主事件循环未启动")
+    future = asyncio.run_coroutine_threadsafe(coro, loop)
+    return future.result(timeout=timeout)
 
 
 # ---------------------------------------------------------------------------
@@ -155,6 +166,21 @@ def join_meeting():
             "roomId": room_id,
             "userId": user_id,
         })
+
+
+@api_bp.route("/api/meetings/<room_id>/moderator", methods=["GET"])
+def get_meeting_moderator(room_id: str):
+    """获取当前房间的主持人信息（用于前端在 join 前预判是否同人重连）"""
+    meeting = get_or_create_meeting(room_id)
+    moderator_id = meeting.get("firstModeratorId")
+    if not moderator_id:
+        return jsonify({"hasModerator": False, "roomId": room_id})
+    return jsonify({
+        "hasModerator": True,
+        "roomId": room_id,
+        "moderatorId": moderator_id,
+        "moderatorName": meeting.get("firstModeratorName"),
+    })
 
 
 # ---------------------------------------------------------------------------
@@ -288,3 +314,111 @@ def audit_logs_api():
     room_id = request.args.get("roomId")
     logs = get_audit_logs(room_id)
     return jsonify({"logs": logs})
+
+
+# ---------------------------------------------------------------------------
+# Meeting Agent Bot 管理
+# ---------------------------------------------------------------------------
+
+@api_bp.route("/api/meetings/<room_id>/bot/spawn", methods=["POST"])
+def bot_spawn(room_id: str):
+    """拉起 Recorder Bot 加入会议
+
+    Body: { "token": "...", "roomUrl": "https://192.0.36.227:8443" }
+    需要 moderator token。
+    """
+    data = request.get_json(silent=True) or {}
+    token = data.get("token")
+    room_url = data.get("roomUrl")
+
+    if not token:
+        return jsonify({"error": "token 必填"}), 400
+    if not room_url:
+        return jsonify({"error": "roomUrl 必填（Jitsi 房间 URL）"}), 400
+    if not is_moderator(token):
+        return jsonify({"error": "只有主持人可以拉起 Bot"}), 403
+
+    payload = verify_token(token)
+    if not payload or payload.get("room") != room_id:
+        return jsonify({"error": "token 无效或与房间不匹配"}), 401
+
+    # bot_jwt 由服务器用 bot 自己的身份重新签发，
+    # 这样 Bot 永远以 "AI Assistant" 身份加会议，不依赖调用方的 token
+    from app.auth import generate_jitsi_token
+    bot_jwt = generate_jitsi_token(
+        room_id=room_id,
+        user_id=f"ai-bot-{int(time.time()*1000)}",
+        user_name="AI Assistant",
+        role="moderator",        # Bot 仍以 moderator 进会议（拿 owner）
+        affiliation="owner",
+    )
+
+    try:
+        from app.meeting_agent.manager.bot_manager import get_bot_manager
+        bot_manager = get_bot_manager()
+        bot = _run_async(
+            bot_manager.spawn_bot(
+                meeting_id=room_id,
+                room_url=room_url,
+                bot_jwt=bot_jwt,
+            ),
+            timeout=30.0,
+        )
+        return jsonify({
+            "success": True,
+            "botId": bot.bot_id,
+            "meetingId": bot.meeting_id,
+            "status": bot.status,
+        })
+    except Exception as e:
+        logger.exception(f"Bot spawn 失败: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/api/meetings/<room_id>/bot/kill", methods=["POST"])
+def bot_kill(room_id: str):
+    """停止 Recorder Bot"""
+    data = request.get_json(silent=True) or {}
+    token = data.get("token")
+    if not token:
+        return jsonify({"error": "token 必填"}), 400
+    if not is_moderator(token):
+        return jsonify({"error": "只有主持人可以停止 Bot"}), 403
+
+    try:
+        from app.meeting_agent.manager.bot_manager import get_bot_manager
+        bot_manager = get_bot_manager()
+        killed = _run_async(bot_manager.kill_bot(room_id), timeout=10.0)
+        return jsonify({
+            "success": killed,
+            "meetingId": room_id,
+        })
+    except Exception as e:
+        logger.exception(f"Bot kill 失败: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/api/meetings/<room_id>/bot/status", methods=["GET"])
+def bot_status(room_id: str):
+    """查询 Bot 状态"""
+    token = request.args.get("token", "")
+    if not token:
+        return jsonify({"error": "token 必填"}), 400
+    if not is_moderator(token):
+        return jsonify({"error": "只有主持人可以查看 Bot 状态"}), 403
+
+    from app.meeting_agent.manager.bot_manager import get_bot_manager
+    bot_manager = get_bot_manager()
+    bot = bot_manager.get_bot(room_id)
+    if bot is None:
+        return jsonify({"meetingId": room_id, "bot": None})
+    return jsonify({"meetingId": room_id, "bot": bot.to_dict()})
+
+
+@api_bp.route("/api/bots", methods=["GET"])
+def bot_list():
+    """列出所有 Bot（调试用）"""
+    from app.meeting_agent.manager.bot_manager import get_bot_manager
+    bot_manager = get_bot_manager()
+    bots = bot_manager.list_bots()
+    return jsonify({"bots": [b.to_dict() for b in bots]})

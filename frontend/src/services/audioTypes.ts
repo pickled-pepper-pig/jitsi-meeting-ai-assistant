@@ -31,6 +31,7 @@ export interface AudioCaptureState {
   partialParticipant: string;  // 正在说话的人
   audioChunks: number;
   startTime?: number;
+  micMuted?: boolean;  // 麦克风是否处于静音（true 时停止上传音频）
 }
 
 export type StateListener = (state: AudioCaptureState) => void;

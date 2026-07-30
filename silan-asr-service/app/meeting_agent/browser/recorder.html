@@ -1,0 +1,473 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>🤖 Meeting Agent Recorder</title>
+  <style>
+    body { font-family: monospace; background: #0f0f1a; color: #e0e0e0; padding: 20px; margin: 0; }
+    h1 { color: #00d4ff; font-size: 18px; }
+    .log { background: #1a1a2e; padding: 10px; border-radius: 6px; margin: 6px 0; font-size: 12px; line-height: 1.5; }
+    .ok { color: #00ff88; }
+    .err { color: #ff4444; }
+    .info { color: #ffaa00; }
+    .debug { color: #888; }
+    #status { font-size: 14px; font-weight: bold; padding: 12px; border-radius: 6px; margin-bottom: 12px; }
+  </style>
+</head>
+<body>
+  <h1>🤖 Meeting Agent Recorder (Day 1-B)</h1>
+  <div id="status" class="log info">初始化中...</div>
+  <div id="log"></div>
+
+  <script>
+  // ============================================================
+  //  Recorder Bot - lib-jitsi-meet 远程音轨采集 + PCM WebSocket 推送
+  //  链路: Jitsi Track → MediaStream → AudioContext → PCM16 → WS → Python
+  // ============================================================
+
+  const logEl = document.getElementById('log');
+  const statusEl = document.getElementById('status');
+
+  function log(msg, type = 'info') {
+    const t = new Date().toISOString();
+    const div = document.createElement('div');
+    div.className = `log ${type}`;
+    div.textContent = `[${t}] ${msg}`;
+    logEl.appendChild(div);
+    logEl.scrollTop = logEl.scrollHeight;
+    console.log(`[Recorder] ${msg}`);
+  }
+
+  function setStatus(text, type = 'info') {
+    statusEl.textContent = text;
+    statusEl.className = `log ${type}`;
+  }
+
+  // === 解析 URL 参数 ===
+  const params = new URLSearchParams(window.location.search);
+  const meetingId = params.get('meeting_id');
+  const roomUrl = params.get('room_url') || '';
+  const botJwt = params.get('bot_jwt');
+  const botToken = params.get('bot_token');
+  const wsUrl = params.get('ws_url');
+
+  log(`meeting_id: ${meetingId}`);
+  log(`room_url: ${roomUrl}`);
+  log(`bot_jwt: ${botJwt ? botJwt.slice(0, 30) + '...' : 'MISSING'}`);
+  log(`bot_token: ${botToken ? botToken.slice(0, 20) + '...' : 'MISSING'}`);
+  log(`ws_url: ${wsUrl || 'MISSING'}`);
+
+  if (!meetingId || !roomUrl || !botJwt || !botToken || !wsUrl) {
+    setStatus('❌ 缺少必要参数，停止', 'err');
+    log('缺少必要参数，停止', 'err');
+    throw new Error('missing required params');
+  }
+
+  // === 全局状态 ===
+  let jitsiConnection = null;
+  let jitsiConference = null;
+  let audioContext = null;
+  let audioContextRate = 16000;
+  let recorderWs = null;
+  let wsReady = false;
+  const captureMap = new Map();   // participantId → { sourceNode, processor, muteGain, stream, trackId }
+  const participantMap = new Map(); // participantId → { name, isLocal }
+  let totalChunks = 0;
+  let chunkSequence = 0;   // PCM 块序号（用于丢包检测 / 重连补偿 / 音频排序）
+  const myUserId = 'ai-bot-' + Date.now();
+
+  // ============================================================
+  //  PCM 转换工具
+  // ============================================================
+  const PCMConverter = {
+    TARGET_SAMPLE_RATE: 16000,
+
+    floatToPCM16(float32) {
+      const int16 = new Int16Array(float32.length);
+      for (let i = 0; i < float32.length; i++) {
+        const s = Math.max(-1, Math.min(1, float32[i]));
+        int16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+      }
+      return int16;
+    },
+
+    resampleLinear(input, inputRate, outputRate) {
+      if (inputRate === outputRate) return input;
+      const ratio = inputRate / outputRate;
+      const outLen = Math.floor(input.length / ratio);
+      const output = new Float32Array(outLen);
+      for (let i = 0; i < outLen; i++) {
+        const srcIdx = i * ratio;
+        const i0 = Math.floor(srcIdx);
+        const i1 = Math.min(i0 + 1, input.length - 1);
+        const frac = srcIdx - i0;
+        output[i] = input[i0] * (1 - frac) + input[i1] * frac;
+      }
+      return output;
+    },
+
+    int16ToBase64(int16) {
+      const bytes = new Uint8Array(int16.buffer, int16.byteOffset, int16.byteLength);
+      let binary = '';
+      const chunk = 0x8000;
+      for (let i = 0; i < bytes.length; i += chunk) {
+        binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+      }
+      return btoa(binary);
+    },
+  };
+
+  // ============================================================
+  //  WebSocket 推送（PCM → Python receiver）
+  // ============================================================
+  function connectRecorderWs() {
+    return new Promise((resolve, reject) => {
+      log(`连接 Recorder WS: ${wsUrl}`, 'info');
+      try {
+        recorderWs = new WebSocket(wsUrl);
+      } catch (e) {
+        reject(new Error(`WebSocket 构造失败: ${e.message}`));
+        return;
+      }
+
+      recorderWs.onopen = () => {
+        log('Recorder WS 已连接，发送 hello', 'ok');
+        recorderWs.send(JSON.stringify({
+          type: 'hello',
+          botToken: botToken,
+          meetingId: meetingId,
+        }));
+      };
+
+      recorderWs.onmessage = (event) => {
+        let msg;
+        try { msg = JSON.parse(event.data); } catch { return; }
+        if (msg.type === 'welcome') {
+          log(`收到 welcome, meetingId=${msg.meetingId}`, 'ok');
+          wsReady = true;
+          resolve();
+        } else if (msg.type === 'error') {
+          log(`服务端错误: ${msg.message}`, 'err');
+          reject(new Error(msg.message));
+        } else if (msg.type === 'participant_registered') {
+          log(`参会者注册: ${msg.participantId} → speaker=${msg.speakerId}`, 'info');
+        }
+      };
+
+      recorderWs.onerror = (e) => {
+        log(`Recorder WS 错误: ${e.message || e.type}`, 'err');
+        reject(new Error('WebSocket error'));
+      };
+
+      recorderWs.onclose = (e) => {
+        log(`Recorder WS 关闭: code=${e.code} reason=${e.reason}`, 'warn');
+        wsReady = false;
+      };
+
+      // 超时保护
+      setTimeout(() => {
+        if (!wsReady) reject(new Error('WebSocket welcome 超时'));
+      }, 10000);
+    });
+  }
+
+  function sendAudioChunk(participantId, trackId, pcm16, sampleRate) {
+    if (!wsReady || !recorderWs || recorderWs.readyState !== WebSocket.OPEN) return;
+    const pcmB64 = PCMConverter.int16ToBase64(pcm16);
+    chunkSequence++;
+    recorderWs.send(JSON.stringify({
+      type: 'audio_chunk',
+      meetingId: meetingId,
+      participantId: participantId,
+      trackId: trackId,
+      sequence: chunkSequence,
+      timestamp: Date.now(),
+      sampleRate: sampleRate,
+      pcm: pcmB64,
+    }));
+    totalChunks++;
+  }
+
+  function sendEvent(eventType, payload) {
+    if (!wsReady || !recorderWs || recorderWs.readyState !== WebSocket.OPEN) return;
+    recorderWs.send(JSON.stringify({
+      type: eventType,
+      meetingId: meetingId,
+      ...payload,
+    }));
+  }
+
+  // ============================================================
+  //  lib-jitsi-meet 加载
+  // ============================================================
+  function loadLibJitsiMeet(jitsiUrl) {
+    return new Promise((resolve, reject) => {
+      if (window.JitsiMeetJS?.JitsiConnection) { resolve(); return; }
+      const script = document.createElement('script');
+      script.src = jitsiUrl + '/libs/lib-jitsi-meet.min.js';
+      script.onload = () => {
+        if (window.JitsiMeetJS?.JitsiConnection) resolve();
+        else reject(new Error('lib-jitsi-meet 加载成功但 JitsiMeetJS.JitsiConnection 不存在'));
+      };
+      script.onerror = () => reject(new Error('无法加载 lib-jitsi-meet: ' + script.src));
+      document.head.appendChild(script);
+    });
+  }
+
+  // ============================================================
+  //  Jitsi 会议接入
+  // ============================================================
+  async function joinMeeting() {
+    const jitsiUrl = roomUrl.replace(/\/$/, '');
+    const jitsiHost = jitsiUrl.replace(/^https?:\/\//, '');
+
+    // 1. 加载 lib-jitsi-meet
+    try {
+      await loadLibJitsiMeet(jitsiUrl);
+      log('lib-jitsi-meet 加载成功', 'ok');
+    } catch (e) {
+      throw new Error('加载 lib-jitsi-meet 失败: ' + e.message);
+    }
+
+    // 2. 初始化 AudioContext（目标 16kHz）
+    audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+    audioContextRate = audioContext.sampleRate;
+    if (audioContextRate !== 16000) {
+      log(`⚠ AudioContext 实际采样率: ${audioContextRate}Hz，将自动重采样到 16kHz`, 'info');
+    } else {
+      log(`AudioContext 采样率: ${audioContextRate}Hz ✓`, 'debug');
+    }
+
+    // 3. 初始化 JitsiMeetJS
+    const JitsiMeetJS = window.JitsiMeetJS;
+    JitsiMeetJS.setLogLevel(JitsiMeetJS.logLevels.ERROR);
+    JitsiMeetJS.init();
+
+    const connEvents = JitsiMeetJS.events.connection;
+    const confEvents = JitsiMeetJS.events.conference;
+
+    // 4. 创建 JitsiConnection（带 JWT）
+    const websocketUrl = jitsiUrl.replace(/^http/, 'ws') + '/xmpp-websocket';
+    log(`连接 Jitsi: ${jitsiHost} (room: ${meetingId}, ws: ${websocketUrl})`, 'info');
+
+    jitsiConnection = new JitsiMeetJS.JitsiConnection(null, botJwt, {
+      serviceUrl: jitsiUrl + '/http-bind',
+      bosh: jitsiUrl + '/http-bind',
+      websocket: websocketUrl,
+      hosts: {
+        domain: 'meet.jitsi',
+        muc: 'muc.meet.jitsi',
+        anonymousdomain: 'guest.meet.jitsi',
+        authdomain: 'meet.jitsi',
+      },
+      focusUserJid: 'focus@auth.meet.jitsi',
+      p2p: { enabled: false },
+    });
+
+    // 5. 连接建立后加入会议
+    jitsiConnection.addEventListener(connEvents.CONNECTION_ESTABLISHED, () => {
+      log('XMPP 连接已建立', 'ok');
+      setStatus('XMPP 连接已建立，加入会议...', 'info');
+
+      jitsiConference = jitsiConnection.initJitsiConference(meetingId, {
+        p2p: { enabled: false },
+        configOverwrite: {
+          startWithAudioMuted: true,
+          startWithVideoMuted: true,
+        },
+      });
+
+      jitsiConference.setDisplayName('AI Assistant');
+
+      // === USER_JOINED ===
+      jitsiConference.on(confEvents.USER_JOINED, (userId, displayName) => {
+        // 兼容 lib-jitsi-meet 新版：第二参数可能是字符串也可能是对象
+        const name = typeof displayName === 'string' ? displayName
+                   : (displayName?.displayName || displayName?.name || '未知参与者');
+        if (userId === myUserId) {
+          log(`✅ Bot 已加入会议 (${userId})`, 'ok');
+          setStatus(`已加入会议 ${meetingId}，等待远程音轨`, 'ok');
+          sendEvent('bot_joined', { botId: myUserId });
+        } else {
+          participantMap.set(userId, { name, isLocal: false });
+          log(`👤 参与者加入: ${name} (${userId})`, 'info');
+          sendEvent('participant_joined', { participantId: userId, displayName: name });
+        }
+      });
+
+      // === USER_LEFT ===
+      jitsiConference.on(confEvents.USER_LEFT, (userId) => {
+        if (userId === myUserId) return;
+        const info = participantMap.get(userId);
+        if (info) log(`👤 参与者离开: ${info.name}`, 'warn');
+        participantMap.delete(userId);
+        if (captureMap.has(userId)) stopCapture(userId);
+        sendEvent('participant_left', { participantId: userId });
+      });
+
+      // === TRACK_ADDED ===
+      jitsiConference.on(confEvents.TRACK_ADDED, (track) => {
+        const trackType = track.getType();
+        const isLocal = track.isLocal();
+        const trackOwnerId = track.getParticipantId();
+        const mediaTrack = track.getTrack();
+
+        log(`TRACK_ADDED: type=${trackType}, local=${isLocal}, owner=${trackOwnerId}, readyState=${mediaTrack?.readyState}`, 'debug');
+
+        if (!isLocal && trackType === 'audio' && mediaTrack) {
+          handleRemoteTrack(mediaTrack, trackOwnerId);
+        }
+      });
+
+      // === TRACK_REMOVED ===
+      jitsiConference.on(confEvents.TRACK_REMOVED, (track) => {
+        const trackOwnerId = track.getParticipantId();
+        log(`TRACK_REMOVED: owner=${trackOwnerId}`, 'debug');
+        if (trackOwnerId && captureMap.has(trackOwnerId)) {
+          stopCapture(trackOwnerId);
+        }
+      });
+
+      jitsiConference.on(confEvents.CONFERENCE_FAILED, (err) => {
+        log('会议失败: ' + err, 'err');
+        setStatus('会议失败', 'err');
+      });
+
+      log('加入会议...', 'info');
+      jitsiConference.join();
+    });
+
+    jitsiConnection.addEventListener(connEvents.CONNECTION_FAILED, (err) => {
+      log('连接失败: ' + JSON.stringify(err), 'err');
+      setStatus('Jitsi 连接失败', 'err');
+    });
+
+    jitsiConnection.connect();
+  }
+
+  // ============================================================
+  //  远程音轨处理
+  // ============================================================
+  function handleRemoteTrack(mediaTrack, participantId) {
+    if (mediaTrack.kind !== 'audio') {
+      log(`忽略非音频轨 (kind=${mediaTrack.kind})`, 'debug');
+      return;
+    }
+    if (captureMap.has(participantId)) {
+      log(`已在捕获 ${participantId}，跳过`, 'debug');
+      return;
+    }
+
+    const info = participantMap.get(participantId) || { name: '未知参与者' };
+    log(`🎤 开始捕获 ${info.name} 的远程音频轨 (trackId=${mediaTrack.id})`, 'ok');
+    startCapture(mediaTrack, participantId, info.name);
+  }
+
+  function startCapture(mediaTrack, participantId, participantName) {
+    const stream = new MediaStream([mediaTrack]);
+    const sourceNode = audioContext.createMediaStreamSource(stream);
+    const processor = audioContext.createScriptProcessor(4096, 1, 1);
+    const muteGain = audioContext.createGain();
+    muteGain.gain.value = 0;  // 静音输出，避免回声
+
+    const trackId = mediaTrack.id;
+
+    processor.onaudioprocess = (e) => {
+      if (!captureMap.has(participantId)) return;
+      const rawInput = e.inputBuffer.getChannelData(0);
+
+      // 重采样到 16kHz
+      let input;
+      if (audioContextRate !== PCMConverter.TARGET_SAMPLE_RATE) {
+        input = PCMConverter.resampleLinear(rawInput, audioContextRate, PCMConverter.TARGET_SAMPLE_RATE);
+      } else {
+        input = new Float32Array(rawInput);
+      }
+
+      // Float32 → Int16 PCM
+      const pcm16 = PCMConverter.floatToPCM16(input);
+
+      // 推送给 Python receiver
+      sendAudioChunk(participantId, trackId, pcm16, PCMConverter.TARGET_SAMPLE_RATE);
+    };
+
+    sourceNode.connect(processor);
+    processor.connect(muteGain);
+    muteGain.connect(audioContext.destination);
+
+    captureMap.set(participantId, {
+      name: participantName,
+      trackId,
+      stream, sourceNode, processor, muteGain,
+    });
+
+    // 通知服务端开始捕获
+    sendEvent('track_capture_started', {
+      participantId,
+      trackId,
+      participantName,
+    });
+
+    mediaTrack.addEventListener('ended', () => {
+      log(`音轨 ended: ${participantName}`, 'warn');
+      if (captureMap.has(participantId)) stopCapture(participantId);
+    });
+
+    setStatus(`正在捕获 ${captureMap.size} 个参会者音频`, 'ok');
+  }
+
+  function stopCapture(participantId) {
+    const cap = captureMap.get(participantId);
+    if (!cap) return;
+
+    try {
+      cap.processor.disconnect();
+      cap.sourceNode.disconnect();
+      cap.muteGain.disconnect();
+      cap.stream.getTracks().forEach(t => t.stop());
+    } catch (e) {
+      log(`stopCapture 异常: ${e.message}`, 'debug');
+    }
+
+    sendEvent('track_capture_stopped', {
+      participantId,
+      trackId: cap.trackId,
+    });
+
+    captureMap.delete(participantId);
+    log(`停止捕获 ${cap.name} (trackId=${cap.trackId})`, 'info');
+    if (captureMap.size === 0) {
+      setStatus(`已加入会议 ${meetingId}，等待远程音轨`, 'info');
+    }
+  }
+
+  // ============================================================
+  //  启动流程
+  // ============================================================
+  (async () => {
+    setStatus('Day 1-B 启动：连接 WebSocket...', 'info');
+    try {
+      // 1. 先连 Recorder WS（确保 Python receiver 就绪）
+      await connectRecorderWs();
+
+      // 2. 加入 Jitsi 会议
+      setStatus('WebSocket 就绪，加入 Jitsi 会议...', 'info');
+      await joinMeeting();
+
+      log('Day 1-B 启动流程完成，等待远程音轨', 'ok');
+    } catch (e) {
+      log(`启动失败: ${e.message}`, 'err');
+      setStatus('启动失败: ' + e.message, 'err');
+    }
+  })();
+
+  // 暴露状态供调试
+  window.__RECORDER_STATE__ = {
+    meetingId, roomUrl, botJwt, botToken, wsUrl,
+    get captureCount() { return captureMap.size; },
+    get totalChunks() { return totalChunks; },
+    get wsReady() { return wsReady; },
+  };
+  </script>
+</body>
+</html>

@@ -175,6 +175,24 @@ export class AudioCaptureService {
     this.audioContext = new AudioContext({ sampleRate: this.config.sampleRate });
     this.sourceNode = this.audioContext.createMediaStreamSource(this.mediaStream);
 
+    // 监听系统/浏览器层麦克风 mute 状态（Jitsi 工具栏点静音时也会同步触发）
+    // 一旦 mute，立即停止向服务器发送 audio_chunk；unmute 后恢复。
+    const audioTrack = this.mediaStream.getAudioTracks()[0];
+    if (audioTrack) {
+      audioTrack.addEventListener('mute', () => {
+        this.updateState({ micMuted: true });
+        console.log('[AudioCapture] Mic muted, pausing audio upload');
+      });
+      audioTrack.addEventListener('unmute', () => {
+        this.updateState({ micMuted: false });
+        console.log('[AudioCapture] Mic unmuted, resuming audio upload');
+      });
+      // 初始化时同步一次当前状态（用户可能开会前就已经静音）
+      if (audioTrack.muted) {
+        this.updateState({ micMuted: true });
+      }
+    }
+
     const bufferSize = this.config.chunkSize || 4096;
     this.processor = this.audioContext.createScriptProcessor(bufferSize, 1, 1);
 
@@ -182,6 +200,11 @@ export class AudioCaptureService {
       if (this.state.status !== 'recording') return;
 
       const inputBuffer = event.inputBuffer.getChannelData(0);
+      // 静音中 → 不采集也不上传（避免无效带宽 & 防止把静音帧送进 ASR）
+      const track = this.mediaStream?.getAudioTracks()[0];
+      if (track?.muted || this.state.micMuted) {
+        return;
+      }
       // 关键：先发再计数。sendAudioChunk 内部会检查 ws.readyState
       // 如果 ws 已关闭则静默丢弃；为了避免误导，我们只在 ws 还活着时计数
       if (this.ws && this.ws.readyState === WebSocket.OPEN && this.sessionId) {

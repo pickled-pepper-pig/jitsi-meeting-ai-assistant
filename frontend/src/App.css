@@ -323,6 +323,20 @@ body {
   background: #9ca3af;
 }
 
+/* 麦克风已静音导致按钮被禁用：明显灰化 + 不可点 */
+.bot-btn.bot-blocked {
+  background: #d1d5db;
+  color: #6b7280;
+  cursor: not-allowed;
+  opacity: 0.6;
+  animation: none;
+}
+
+.bot-btn.bot-blocked:hover {
+  transform: none;
+  opacity: 0.6;
+}
+
 @keyframes pulse-recording {
   0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4); }
   50% { box-shadow: 0 0 0 6px rgba(239, 68, 68, 0); }
@@ -333,6 +347,11 @@ body {
   font-size: 11px;
   color: #9ca3af;
   text-align: center;
+}
+
+.bot-tip.bot-tip-warn {
+  color: #f59e0b;
+  font-weight: 500;
 }
 
 /* 旁观者视图：仅显示"AI 正在转写中"，不可点 */

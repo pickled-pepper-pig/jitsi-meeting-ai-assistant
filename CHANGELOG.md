@@ -2,6 +2,26 @@
 
 本项目的所有重要变更都会记录在此文件中。
 
+## [1.5.0] - 2026-07-30
+
+### feat（新功能）
+- Meeting Agent 基础设施：Playwright + Headless Chromium 控制的 Recorder Bot，模块化目录 `manager/browser/audio/participant`
+- Bot 生命周期 API：`/api/meetings/{roomId}/bot/{spawn,kill,status}`，仅主持人可调用，Bot JWT 由服务端重签为 "AI Assistant"
+- WebSocket 路径分发：`/ws/recorder/*` 走 Bot recorder receiver，与会议/ASR 通道隔离
+- 房间级 AI 操作者去重：transcript 广播时按 userId 跳过操作者本人 ws，避免重复显示
+- 中途加入者补发 `ai_bot_status`，让旁观者立刻看到当前是否在录音
+- 前端多路远程音频接收器 `ParticipantAudioReceiver`：每个参会者一个 session + 一个 ws
+- 前端 partial 转写实时显示（`meeting_transcript_partial` 事件）
+- userId 解析顺序优化：localStorage 优先 → 后端主持人昵称匹配 → 临时生成，避免重连身份漂移
+- 新增 `GET /api/meetings/{roomId}/moderator` 接口，供前端 join 前预判是否同人重连
+
+### fix（修复）
+- 移除代理/VPN 检测弹窗，健康检查失败时静默处理
+- 修复 JVB 容器 IP 配置（172.18.0.4 → 172.18.0.2）
+
+### chore（维护）
+- 清理根目录误建的 `app/` 空目录（真实代码在 `silan-asr-service/app/meeting_agent/`）
+
 ## [1.4.0] - 2026-07-29
 
 ### feat（新功能）

@@ -13,6 +13,7 @@
 - **角色权限**：主持人/参会者区分，一房一主持人
 - **房间级 AI 广播**：主持人开启 AI 后，房间内所有人实时看到转写内容
 - **AI Gateway**：会议生命周期管理、权限校验、Bot 管理
+- **Meeting Agent**：Playwright + Headless Chromium 控制的 Recorder Bot，作为隐藏参会者加入会议捕获音频
 - **JWT 认证**：HS256 共享密钥，支持 Jitsi XMPP affiliation
 - **Redis 状态**：会议状态持久化，支持内存降级
 - **本地部署**：Docker 一键部署 Jitsi
@@ -49,6 +50,11 @@ silan-jitsi/
 │   │   ├── api_routes/         # HTTP API 路由
 │   │   ├── meeting_ws/         # 会议 WebSocket 处理
 │   │   ├── meeting_state/      # Redis 会议状态
+│   │   ├── meeting_agent/      # Meeting Agent（Playwright + Chromium Recorder Bot）
+│   │   │   ├── manager/        # Bot 生命周期管理（spawn/kill/status）
+│   │   │   ├── browser/        # Playwright 控制器 + recorder.html
+│   │   │   ├── audio/          # Bot 侧 PCM 接收 + 重采样 + wav 落盘
+│   │   │   └── participant/    # participant_id ↔ speaker_id 映射
 │   │   ├── auth/               # JWT 认证
 │   │   ├── llm_service/        # Mock LLM 总结
 │   │   ├── audit_log/          # 审计日志
@@ -262,6 +268,37 @@ Content-Type: application/json
 ```bash
 GET http://localhost:8082/api/audit-logs?roomId=room-a
 ```
+
+### Meeting Agent Bot 管理
+
+仅主持人 token 可调用。Bot JWT 由服务端重签为 "AI Assistant" 身份，不依赖调用方 token。
+
+```bash
+# 拉起 Recorder Bot 加入会议
+POST http://localhost:8082/api/meetings/{roomId}/bot/spawn
+Content-Type: application/json
+
+{
+  "token": "your-moderator-token",
+  "roomUrl": "https://192.0.36.227:8443"
+}
+
+# 停止 Bot
+POST http://localhost:8082/api/meetings/{roomId}/bot/kill
+Content-Type: application/json
+
+{
+  "token": "your-moderator-token"
+}
+
+# 查询 Bot 状态
+GET http://localhost:8082/api/meetings/{roomId}/bot/status?token=your-moderator-token
+
+# 列出所有 Bot（调试用）
+GET http://localhost:8082/api/bots
+```
+
+Bot 侧 PCM 通过独立 WebSocket 路径 `/ws/recorder/{meeting_id}` 上行，与会议/ASR 通道隔离。
 
 ---
 

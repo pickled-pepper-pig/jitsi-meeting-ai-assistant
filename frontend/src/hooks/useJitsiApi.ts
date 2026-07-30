@@ -19,6 +19,12 @@ interface JitsiEventCallbacks {
   onReady?: () => void;
   onParticipantJoined?: (participantId: string, displayName: string) => void;
   onParticipantLeft?: (participantId: string) => void;
+  // 参会者数量变化（含自己）
+  onParticipantsChange?: (count: number) => void;
+  onMicMuteChange?: (muted: boolean) => void;
+  // 新轨道事件：Jitsi 发布/移除任意轨道时触发（含 local 和 remote，video/audio）
+  onTrackAdded?: (info: { participantId: string; participantName: string; track: MediaStreamTrack; kind: 'audio' | 'video'; local: boolean }) => void;
+  onTrackRemoved?: (info: { participantId: string; track: MediaStreamTrack; kind: 'audio' | 'video'; local: boolean }) => void;
 }
 
 let scriptLoadPromise: Promise<void> | null = null;
@@ -72,9 +78,12 @@ export function useJitsiApi(options: JitsiOptions, callbacks: JitsiEventCallback
   const apiRef = useRef<any>(null);
   const [isReady, setIsReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [micMuted, setMicMuted] = useState(false);
   const callbacksRef = useRef(callbacks);
   const optionsRef = useRef(options);
   const initializedRef = useRef(false);
+  // 维护当前房间的参会者集合（含自己），用于推导真实参会者数量
+  const participantsRef = useRef<Set<string>>(new Set());
 
   callbacksRef.current = callbacks;
   optionsRef.current = options;
@@ -94,6 +103,7 @@ export function useJitsiApi(options: JitsiOptions, callbacks: JitsiEventCallback
           apiRef.current = null;
         }
         initializedRef.current = false;
+        participantsRef.current.clear();
         setIsReady(false);
       }
 
@@ -158,12 +168,47 @@ export function useJitsiApi(options: JitsiOptions, callbacks: JitsiEventCallback
           iframe.setAttribute('allowfullscreen', 'true');
         }
 
+        const refreshParticipantsCount = () => {
+          // 每次都拿全量 Jitsi 参会者信息，避免增量跟踪漏算"对方在我 ready 前已进入"的情况
+          try {
+            const list = api.getParticipantsInfo?.();
+            if (Array.isArray(list)) {
+              // 部分 Jitsi 版本 getParticipantsInfo 不含自己，兜底用 max(1, size)
+              const count = Math.max(1, list.length);
+              participantsRef.current = new Set(
+                list.map((p: any) => p.participantId).filter(Boolean),
+              );
+              callbacksRef.current.onParticipantsChange?.(count);
+            }
+          } catch {
+            // 兜底：保持 participantsRef 至少 1 人（自己）
+            if (participantsRef.current.size === 0) {
+              callbacksRef.current.onParticipantsChange?.(1);
+            }
+          }
+        };
+
         api.addListener('ready', () => {
           if (disposed) return;
           console.log('[Jitsi] Ready');
           setIsReady(true);
           setError(null);
           callbacksRef.current.onReady?.();
+          // ready 时主动拉一次全量参会者（自己的 participantJoined 不会触发）
+          refreshParticipantsCount();
+        });
+
+        api.addListener('participantJoined', (e: any) => {
+          if (e.id) participantsRef.current.add(e.id);
+          callbacksRef.current.onParticipantJoined?.(e.id, e.displayName || '未知用户');
+          // 增量 + 1（同时用全量刷新兜底，确保新计算正确）
+          refreshParticipantsCount();
+        });
+
+        api.addListener('participantLeft', (e: any) => {
+          if (e.id) participantsRef.current.delete(e.id);
+          callbacksRef.current.onParticipantLeft?.(e.id);
+          refreshParticipantsCount();
         });
 
         api.addListener('error', (err: any) => {
@@ -189,12 +234,38 @@ export function useJitsiApi(options: JitsiOptions, callbacks: JitsiEventCallback
           callbacksRef.current.onVideoConferenceLeft?.();
         });
 
-        api.addListener('participantJoined', (e: any) => {
-          callbacksRef.current.onParticipantJoined?.(e.id, e.displayName || '未知用户');
+        // Jitsi 工具栏麦克风按钮的 mute 状态变化（包括"开始就静音"）
+        api.addListener('audioMuteStatusChanged', (e: any) => {
+          const muted = !!(e?.muted ?? false);
+          setMicMuted(muted);
+          callbacksRef.current.onMicMuteChange?.(muted);
         });
 
-        api.addListener('participantLeft', (e: any) => {
-          callbacksRef.current.onParticipantLeft?.(e.id);
+        // 任何参与者发布/移除轨道（本地 + 远程；audio + video）
+        // 通过这里把 Jitsi 的 MediaStreamTrack 暴露给上层，让上层决定要不要采集
+        api.addListener('trackAdded', (e: any) => {
+          const track: MediaStreamTrack | undefined = e?.track;
+          if (!track) return;
+          const kind = (track.kind || e?.type || 'video') as 'audio' | 'video';
+          callbacksRef.current.onTrackAdded?.({
+            participantId: e?.participantId || '',
+            participantName: e?.participantDisplayName || e?.displayName || '未知参与者',
+            track,
+            kind,
+            local: !!e?.local,
+          });
+        });
+
+        api.addListener('trackRemoved', (e: any) => {
+          const track: MediaStreamTrack | undefined = e?.track;
+          if (!track) return;
+          const kind = (track.kind || e?.type || 'video') as 'audio' | 'video';
+          callbacksRef.current.onTrackRemoved?.({
+            participantId: e?.participantId || '',
+            track,
+            kind,
+            local: !!e?.local,
+          });
         });
 
       } catch (err: any) {
@@ -218,5 +289,5 @@ export function useJitsiApi(options: JitsiOptions, callbacks: JitsiEventCallback
     };
   }, [options.domain, options.protocol, options.roomName, options.displayName, options.parentNode, options.token]);
 
-  return { api: apiRef.current, isReady, error };
+  return { api: apiRef.current, isReady, error, micMuted };
 }

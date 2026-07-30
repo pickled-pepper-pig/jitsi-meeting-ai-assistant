@@ -8,6 +8,7 @@ import { MessageBuffer } from './utils/messageBuffer';
 import { ChatMessage, ServerMessage } from './types';
 import { getJitsiDomain, getJitsiProtocol, API_CONFIG } from './config';
 import { AudioCaptureService } from './services/audioCapture';
+import { ParticipantAudioReceiver, ParticipantTrackInfo } from './services/participantAudioReceiver';
 import { AudioCaptureState } from './services/audioTypes';
 import './App.css';
 
@@ -27,17 +28,29 @@ export default function App() {
   const [joined, setJoined] = useState(false);
   const [aiEnabled, setAiEnabled] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [showProxyWarning, setShowProxyWarning] = useState(false);
   const [showModeratorOccupied, setShowModeratorOccupied] = useState(false);
   const [moderatorOccupiedMessage, setModeratorOccupiedMessage] = useState('');
   const [botStatus, setBotStatus] = useState<'idle' | 'starting' | 'started' | 'stopping'>('idle');
   const [audioState, setAudioState] = useState<AudioCaptureState | null>(null);
+  const [micMuted, setMicMuted] = useState(false);  // 来自 Jitsi 工具栏的麦克风静音状态
+  // 旁观者侧收到的实时 partial 转写（来自操作者的 ASR 流）
+  const [remotePartial, setRemotePartial] = useState<{ text: string; participant: string } | null>(null);
+  // 真实参会者数量（含自己，来自 Jitsi IFrame API 的 participantJoined/Left 事件）
+  const [participantsCount, setParticipantsCount] = useState(1);
 
   const tokenRef = useRef<string>('');
   const userIdRef = useRef<string>('');
   const audioServiceRef = useRef<AudioCaptureService | null>(null);
   // 标记"当前用户是否就是开启 AI 的人"——区分自己开 vs 别人开后只能查看
   const isBotOperatorRef = useRef<boolean>(false);
+  // 多路远程音频采集器：每个参会者一个 session + 一个 ws
+  const participantAudioReceiverRef = useRef<ParticipantAudioReceiver | null>(null);
+  // 缓存已知的参会者 audio track（包括 bot 未启动时）—— bot 启动时遍历并接入
+  const pendingRemoteAudioRef = useRef<Map<string, { participantName: string; track: MediaStreamTrack }>>(
+    new Map(),
+  );
+  // 当前活跃的远程采集数（用于 Sidebar 显示）
+  const [remoteCaptureCount, setRemoteCaptureCount] = useState(0);
 
   const messageBufferRef = useRef(new MessageBuffer());
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -63,7 +76,7 @@ export default function App() {
         if (!res.ok) throw new Error('Health check failed');
       })
       .catch(() => {
-        setShowProxyWarning(true);
+        // Silently ignore health check failures
       })
       .finally(() => {
         clearTimeout(timeoutId);
@@ -130,6 +143,8 @@ export default function App() {
           if (t.text) {
             const speakerName = t.participant_name || 'AI 转写';
             const ts = t.timestamp || Date.now();
+            // 收到 final：清掉之前的 partial
+            setRemotePartial(null);
             setMessages(prev => {
               // 去重：同 speaker + 同内容 + 1s 内的视为同一条
               const last = prev[prev.length - 1];
@@ -145,6 +160,23 @@ export default function App() {
                 timestamp: ts,
                 type: 'text' as const,
               }];
+            });
+          }
+        }
+        break;
+      case 'meeting_transcript_partial':
+        // 旁观者收到操作者正在说的 partial 文本（实时显示用，不入 messages 列表）
+        {
+          const t = message as unknown as {
+            text: string;
+            participant_id?: string;
+            participant_name?: string;
+            timestamp?: number;
+          };
+          if (t.text) {
+            setRemotePartial({
+              text: t.text,
+              participant: t.participant_name || 'AI 转写',
             });
           }
         }
@@ -185,7 +217,43 @@ export default function App() {
       return;
     }
 
-    const userId = `user-${Date.now()}`;
+    // 稳定 userId 解析顺序：
+    //   1) localStorage 同名同房间 → 直接复用（同一浏览器刷新场景）
+    //   2) 后端记录的当前房间主持人昵称 == 当前昵称 → 复用后端存的 userId
+    //      （解决「旧的 wei 进来时 localStorage 还没建过、但后端 firstModeratorName 是 wei」这种历史数据场景）
+    //   3) 都没有 → 临时生成一个新 ID 并写入 localStorage
+    const trimmedRoom = roomName.trim();
+    const trimmedName = displayName.trim();
+    const storageKey = `meeting:userId:${trimmedRoom}:${trimmedName}`;
+    let userId = '';
+    try {
+      userId = localStorage.getItem(storageKey) || '';
+    } catch {
+      // localStorage 不可用时回退到下面的查询
+    }
+    if (!userId) {
+      try {
+        const r = await fetch(
+          `${API_CONFIG.baseUrl}/api/meetings/${encodeURIComponent(trimmedRoom)}/moderator`,
+        );
+        if (r.ok) {
+          const data = await r.json();
+          if (data?.hasModerator && data.moderatorName === trimmedName && data.moderatorId) {
+            userId = data.moderatorId;
+          }
+        }
+      } catch {
+        // 查询失败不阻塞，按临时 ID 继续
+      }
+    }
+    if (!userId) {
+      userId = `user-${Date.now()}`;
+    }
+    try {
+      localStorage.setItem(storageKey, userId);
+    } catch {
+      // 写入失败也无影响
+    }
     userIdRef.current = userId;
 
     try {
@@ -203,7 +271,7 @@ export default function App() {
         setShowModeratorOccupied(true);
         return;
       }
-      setShowProxyWarning(true);
+      alert('无法连接到后端服务，请检查网络');
     }
   };
 
@@ -261,10 +329,66 @@ export default function App() {
     setMessages([]);
   };
 
+  /**
+   * Jitsi 轨道事件回调：
+   * - 缓存所有 audio track（含 local 和 remote）
+   * - 如果 bot 启动了 + 收到的是 remote audio track → 自动启动远程采集
+   */
+  const handleTrackAdded = (info: { participantId: string; participantName: string; track: MediaStreamTrack; kind: 'audio' | 'video'; local: boolean }) => {
+    if (info.kind !== 'audio') return;
+    if (!info.participantId) return;
+    // 用 participantId 作为缓存 key
+    pendingRemoteAudioRef.current.set(info.participantId, {
+      participantName: info.participantName,
+      track: info.track,
+    });
+    // bot 已启动 + 是 remote audio → 立即接入
+    if (info.local === false && botStatus === 'started' && participantAudioReceiverRef.current) {
+      void attachRemoteTrack(info.participantId, info.participantName, info.track);
+    }
+  };
+
+  const handleTrackRemoved = (info: { participantId: string; track: MediaStreamTrack; kind: 'audio' | 'video'; local: boolean }) => {
+    if (info.kind !== 'audio') return;
+    if (!info.participantId) return;
+    pendingRemoteAudioRef.current.delete(info.participantId);
+    if (info.local === false && participantAudioReceiverRef.current) {
+      void participantAudioReceiverRef.current.stopCapture(info.participantId).catch(() => {});
+    }
+  };
+
+  /** 把单个远程参会者音频接入采集器（启动 capture + 连后端 ws） */
+  const attachRemoteTrack = async (participantId: string, participantName: string, track: MediaStreamTrack) => {
+    const receiver = participantAudioReceiverRef.current;
+    if (!receiver) return;
+    const info: ParticipantTrackInfo = {
+      participantId,
+      participantName,
+      trackId: track.id,
+      isLocal: false,
+    };
+    try {
+      await receiver.startCapture(track, info, {
+        sendToBackend: true,
+        backendWsUrl: API_CONFIG.wsUrl,
+        meetingId: roomName,
+      });
+      await receiver.connectBackendForSession(participantId, API_CONFIG.wsUrl);
+      setRemoteCaptureCount(receiver.getAllCaptureStates().filter(s => s.isCapturing).length);
+      console.log(`[App] 远程参会者音频已接入: ${participantName}`);
+    } catch (err) {
+      console.error(`[App] 远程参会者接入失败 [${participantName}]:`, err);
+    }
+  };
+
   const handleStartBot = async () => {
     if (botStatus !== 'idle') return;
     if (!isModerator) {
       alert('只有主持人可以开启 AI 语音识别');
+      return;
+    }
+    if (micMuted) {
+      alert('请先取消 Jitsi 工具栏的麦克风静音，再开启 AI 语音识别');
       return;
     }
     setBotStatus('starting');
@@ -309,8 +433,24 @@ export default function App() {
       });
       await audioService.start();
       isBotOperatorRef.current = true;
+
+      // 启动多路远程音频采集器 + 接入当前已存在的 remote audio tracks
+      const receiver = new ParticipantAudioReceiver();
+      await receiver.initialize();
+      participantAudioReceiverRef.current = receiver;
+      const pending = pendingRemoteAudioRef.current;
+      for (const [pid, info] of pending.entries()) {
+        // local 的 track 由 audioCapture 处理，不重复接
+        if (info.track.readyState === 'live') {
+          // 跳过 local（pending 里也可能有 local，用 jid 前缀判断；这里用 userIdRef 简单排除）
+          if (pid !== userIdRef.current) {
+            await attachRemoteTrack(pid, info.participantName, info.track);
+          }
+        }
+      }
+
       setBotStatus('started');
-      console.log('[App] AI Bot 已启动，音频采集中...');
+      console.log('[App] AI Bot 已启动，本地 + 远程参会者音频采集中...');
     } catch (err) {
       console.error('[App] AI Bot 启动失败:', err);
       isBotOperatorRef.current = false;
@@ -323,9 +463,17 @@ export default function App() {
     if (!isBotOperatorRef.current) return;  // 旁观者没权利停
     setBotStatus('stopping');
     try {
+      // 停止本地采集
       await audioServiceRef.current?.stop();
       audioServiceRef.current = null;
       setAudioState(null);
+      // 停止所有远程采集（每个 session 的 ws 会在 stopCapture 中关闭）
+      if (participantAudioReceiverRef.current) {
+        await participantAudioReceiverRef.current.stopAll();
+        await participantAudioReceiverRef.current.destroy();
+        participantAudioReceiverRef.current = null;
+      }
+      setRemoteCaptureCount(0);
       isBotOperatorRef.current = false;
       setBotStatus('idle');
       console.log('[App] AI Bot 已停止');
@@ -336,30 +484,20 @@ export default function App() {
     }
   };
 
+  // 用户在 Jitsi 工具栏点了麦克风静音 → 如果正在录制，自动停止录制
+  // 配合 audioCapture 的"静音帧不发送"逻辑一起工作
+  useEffect(() => {
+    if (micMuted && botStatus === 'started' && isBotOperatorRef.current) {
+      console.log('[App] 麦克风已静音，自动停止 AI 录制');
+      handleStopBot();
+    }
+    // 只在意 micMuted 翻转为 true 的瞬间；handleStopBot 内部已有 started/operator 校验
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [micMuted, botStatus]);
+
   if (!joined) {
     return (
       <div className="join-page">
-        {showProxyWarning && (
-          <div className="proxy-warning-overlay">
-            <div className="proxy-warning-modal">
-              <div className="proxy-warning-icon">⚠️</div>
-              <h3>检测到代理/VPN</h3>
-              <p>当前网络环境可能使用了代理或VPN，这会导致无法正常访问会议服务。</p>
-              <div className="proxy-warning-steps">
-                <h4>请按以下步骤操作：</h4>
-                <ol>
-                  <li>打开「系统设置」→「网络」→「Wi-Fi」→「详细信息」</li>
-                  <li>点击「代理」标签页</li>
-                  <li>取消勾选「Web 代理 (HTTP)」和「安全 Web 代理 (HTTPS)」</li>
-                  <li>或在「绕过代理服务器的主机与域名」中添加当前 IP 地址</li>
-                </ol>
-              </div>
-              <button className="proxy-warning-btn" onClick={() => setShowProxyWarning(false)}>
-                我已关闭代理
-              </button>
-            </div>
-          </div>
-        )}
         {showModeratorOccupied && (
           <div className="proxy-warning-overlay">
             <div className="proxy-warning-modal">
@@ -446,6 +584,10 @@ export default function App() {
           onIncomingMessage={handleIncomingMessage}
           onOutgoingMessage={handleOutgoingMessage}
           onVideoConferenceLeft={handleVideoConferenceLeft}
+          onMicMuteChange={setMicMuted}
+          onTrackAdded={handleTrackAdded}
+          onTrackRemoved={handleTrackRemoved}
+          onParticipantsChange={setParticipantsCount}
         />
       </div>
       <Sidebar
@@ -460,6 +602,10 @@ export default function App() {
         onStopBot={handleStopBot}
         botStatus={botStatus}
         audioState={audioState}
+        micMuted={micMuted}
+        remoteCaptureCount={remoteCaptureCount}
+        remotePartial={remotePartial}
+        participantsCount={participantsCount}
       />
       <button className="leave-btn" onClick={handleLeave}>
         离开会议
