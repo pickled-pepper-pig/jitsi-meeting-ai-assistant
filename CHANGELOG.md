@@ -2,6 +2,25 @@
 
 本项目的所有重要变更都会记录在此文件中。
 
+## [1.7.0] - 2026-07-31
+
+### feat（新功能）
+- 多 Speaker 转写：主持人端开 AI 后，Bot 自动接管所有参会者音频采集，sidebar 按 speaker 区分转写来源
+- 主持人名字标注：主持人本地视角下自己的消息标注「（主持人）」
+- Speaker 颜色区分：transcript 消息按 sender 名字哈希生成稳定莫兰迪色，左色条 + sender 同色
+- 前端集成 Bot 生命周期：开/停止 AI 自动 spawn/kill 后端 Bot，无需手动 curl
+- Bot recorder 兼容 Int16 PCM：检测到 Int16 自动 remap 到 Float32，避免 ASR 解析失败
+
+### fix（修复）
+- Bot 静态 tracks 不曝光问题：等 participantDisplayName 出现后再注册 ASR session，避免 "未知参与者"
+- audioCapture `sendAudioChunk` 添加 maxAbs 调试日志，便于线上判断 mic 是静音还是有采集
+
+### perf（性能）
+- WS 主循环 audio_chunk 改为 fire-and-forget 投递线程池，解除多 session 串行等待 VAD/降噪导致的 wsLoopLag 飙升（2 并发 653ms → 60ms）
+
+### test（测试）
+- 新增 `tools/stress_test.py` 并发压测脚本：模拟 N 个 speaker 同时喂数据，监视 wsLoopLag / partials / finals
+
 ## [1.6.0] - 2026-07-30
 
 ### feat（新功能）
