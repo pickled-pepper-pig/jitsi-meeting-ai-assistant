@@ -31,6 +31,13 @@ function getSpeakerColor(sender: string): string {
   return SPEAKER_COLORS[hash % SPEAKER_COLORS.length];
 }
 
+// 取名字的首字符（中文取首个字，英文取首字母并大写）
+function getInitial(name: string): string {
+  const trimmed = name.trim();
+  if (!trimmed) return '?';
+  return trimmed.charAt(0).toUpperCase();
+}
+
 export function MessageList({ messages }: MessageListProps) {
   const listRef = useRef<HTMLDivElement>(null);
 
@@ -45,7 +52,6 @@ export function MessageList({ messages }: MessageListProps) {
     return new Date(timestamp).toLocaleTimeString('zh-CN', {
       hour: '2-digit',
       minute: '2-digit',
-      second: '2-digit',
     });
   };
 
@@ -53,9 +59,9 @@ export function MessageList({ messages }: MessageListProps) {
     return (
       <div className="message-list empty" ref={listRef}>
         <div className="empty-tip">
-          暂无消息
-          <br />
-          开始聊天后，消息会实时显示在这里
+          <div className="empty-icon">💬</div>
+          <div className="empty-title">暂无会议纪要</div>
+          <div className="empty-subtitle">开启 AI 转写后，发言内容将自动记录于此</div>
         </div>
       </div>
     );
@@ -64,24 +70,33 @@ export function MessageList({ messages }: MessageListProps) {
   return (
     <div className="message-list" ref={listRef}>
       {messages.map((msg) => {
-        // transcript 类消息按 sender 着色；其他类型保留默认样式
         const isTranscript = msg.type === 'text';
+        const isSummary = msg.type === 'summary';
         const speakerColor = isTranscript ? getSpeakerColor(msg.sender) : undefined;
         return (
         <div
           key={msg.id}
           className={`message-item message-${msg.type}`}
-          style={isTranscript ? { borderLeft: `3px solid ${speakerColor}` } : undefined}
+          style={isTranscript ? { borderLeftColor: speakerColor } : undefined}
         >
-          {msg.type === 'summary' ? (
+          {isSummary ? (
             <div className="message-summary">
-              <div className="message-summary-header">📋 会议总结</div>
+              <div className="message-summary-header">
+                <span className="message-summary-icon">📋</span>
+                <span className="message-summary-title">会议总结</span>
+                <span className="message-time">{formatTime(msg.timestamp)}</span>
+              </div>
               <pre className="message-summary-content">{msg.content}</pre>
-              <span className="message-time">{formatTime(msg.timestamp)}</span>
             </div>
           ) : (
             <>
               <div className="message-header">
+                <span
+                  className="message-avatar"
+                  style={speakerColor ? { background: speakerColor } : undefined}
+                >
+                  {getInitial(msg.sender)}
+                </span>
                 <span
                   className="message-sender"
                   style={isTranscript ? { color: speakerColor } : undefined}

@@ -2,6 +2,26 @@
 
 本项目的所有重要变更都会记录在此文件中。
 
+## [1.8.0] - 2026-07-31
+
+### feat（新功能）
+- 名字查重：加入会议时检查房间内用户名是否被占用，避免重复
+- 主持人创建会议时自动清空上一轮会议的历史纪要，所有参会者从空白开始
+- 页面刷新自动重连：URL 带 room + name 时无需手动重新输入
+
+### fix（修复）
+- BotManager 复用单例 BrowserController，修复 kill 失效（之前每次 new 新实例导致 _browsers 字典为空）
+- Bot 元数据持久化到 Redis，进程重启后标记 stale 并提示，避免误判"已有运行 Bot"
+- recorder.html 注入 URL 的 room_url 用 full encode，修复 `://` 被破坏导致加入会议失败
+- Bot 失败时显式标记 failed，避免 kill 走 noop 分支
+
+### refactor（重构）
+- 主持人不再启动本端 `AudioCaptureService`，统一由 Bot 在 Playwright 里采集所有参会者音频，避免重复 transcript
+- 用户名冲突前端 alert 提示，区分 409（moderator_occupied / name_conflict）
+
+### style（样式）
+- sidebar 消息样式优化：头像、自定义滚动条、hover 阴影、summary 渐变背景
+
 ## [1.7.0] - 2026-07-31
 
 ### feat（新功能）
