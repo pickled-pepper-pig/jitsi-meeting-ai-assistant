@@ -167,6 +167,94 @@ class WebSocketGatewayServer:
             self._socketio.emit("meeting_transcript", message, room=meeting_id)
 
     # -----------------------------------------------------------------------
+    # 统一音频入口：source 可以是 "bot" / "browser" / "upload"
+    # Bot 从 receiver.py 调用；未来 browser 也可复用同一入口
+    # -----------------------------------------------------------------------
+    def ingest_bot_audio(
+        self,
+        *,
+        meeting_id: str,
+        participant_id: str,
+        display_name: str,
+        pcm: bytes,
+        sample_rate: int = 16000,
+        source: str = "bot",
+    ) -> None:
+        """统一音频入口：Bot / 浏览器 / 文件回放都走这里。
+
+        session_id 全局统一格式：meeting:{meeting_id}:participant:{participant_id}
+        避免和 browser 路径冲突，也方便未来多 source 共用。
+        """
+        if not meeting_id or not participant_id:
+            logger.warning("[Ingest] missing meeting_id or participant_id, drop")
+            return
+
+        session_id = f"meeting:{meeting_id}:participant:{participant_id}"
+
+        # 1. session_manager 注册（幂等：不存在则创建）
+        try:
+            existing = self.session_manager.get_session(session_id)
+            if existing is None:
+                self.session_manager.create_session(
+                    session_id=session_id,
+                    meeting_id=meeting_id,
+                    participant_id=participant_id,
+                    participant_name=display_name,
+                    client_id=f"bot:{source}",
+                    sample_rate=sample_rate,
+                )
+                logger.info(f"[Ingest] created session {session_id} (source={source})")
+        except Exception as e:
+            logger.error(f"[Ingest] create_session error: {e}")
+
+        # 2. transcript_aggregator 注册（幂等）
+        try:
+            self.transcript_aggregator.register_session(
+                session_id=session_id,
+                participant_id=participant_id,
+                participant_name=display_name or "Unknown",
+                meeting_id=meeting_id,
+            )
+        except Exception as e:
+            logger.error(f"[Ingest] aggregator register error: {e}")
+
+        # 3. 喂给 ASR Worker（Aggregator 在 on_asr_result 中自动聚合）
+        try:
+            self.asr_worker.submit_audio(
+                session_id=session_id,
+                audio_data=pcm,
+                sample_rate=sample_rate,
+                timestamp=int(time.time() * 1000),
+            )
+        except Exception as e:
+            logger.error(f"[Ingest] submit_audio error: {e}")
+
+        # 4. 刷新 aggregator 计时（避免 silence_timeout 误判句尾）
+        try:
+            self.transcript_aggregator.touch_session(session_id)
+        except Exception:
+            pass
+
+    def finalize_bot_session(self, *, meeting_id: str, participant_id: str) -> None:
+        """Bot 路径某个 participant 离开：结束 ASR session + 收尾"""
+        if not meeting_id or not participant_id:
+            return
+        session_id = f"meeting:{meeting_id}:participant:{participant_id}"
+        try:
+            self.transcript_aggregator.unregister_session(session_id)
+        except Exception as e:
+            logger.error(f"[Ingest] aggregator unregister error: {e}")
+        try:
+            self.asr_worker.finalize_session(session_id)
+        except Exception as e:
+            logger.error(f"[Ingest] worker finalize error: {e}")
+        try:
+            self.session_manager.close_session(session_id)
+        except Exception as e:
+            logger.error(f"[Ingest] close_session error: {e}")
+        logger.info(f"[Ingest] finalized session {session_id}")
+
+    # -----------------------------------------------------------------------
     # WebSocket handler
     # -----------------------------------------------------------------------
     async def _handler(self, websocket: ServerConnection):
@@ -179,7 +267,8 @@ class WebSocketGatewayServer:
             path = websocket.path or ""
         if path.startswith("/ws/recorder/"):
             from app.meeting_agent.audio.receiver import handle_recorder_ws
-            await handle_recorder_ws(websocket, path)
+            # 注入 Gateway 自身，让 Bot receiver 复用 ASR Worker / Aggregator / broadcast
+            await handle_recorder_ws(websocket, path, gateway=self)
             return
 
         ws_id = str(uuid.uuid4())
@@ -344,6 +433,33 @@ class WebSocketGatewayServer:
     # -----------------------------------------------------------------------
     # Audio handlers
     # -----------------------------------------------------------------------
+    async def _process_and_submit_audio(
+        self, session_id: str, audio_bytes: bytes, sample_rate: int
+    ) -> None:
+        """后台处理 audio_chunk：VAD/降噪 + 提交到 ASR worker。
+        被 _handle_audio 的 audio_chunk 分支以 fire-and-forget 方式调用，
+        避免阻塞 WS 主循环。"""
+        try:
+            audio_np = np.frombuffer(audio_bytes, dtype=np.float32)
+            processed = await asyncio.to_thread(
+                self.audio_processor.process, audio_np, sample_rate
+            )
+            # 关键：只要有音频帧进来（无论 VAD 是否判为语音），都要刷新 aggregator
+            # 的 last_update_time。否则用户句中换气时模型会返回 text=''，
+            # aggregator 看到空文本不更新 last_update_time，silence_timeout 误判句尾。
+            self.transcript_aggregator.touch_session(session_id)
+            if not processed.get("is_speech", True):
+                return
+            self.asr_worker.submit_audio(
+                session_id=session_id,
+                audio_data=processed["audio"].tobytes(),
+                sample_rate=processed["sample_rate"],
+                timestamp=int(time.time() * 1000),
+            )
+            self.session_manager.update_session_activity(session_id)
+        except Exception as e:
+            logger.exception(f"[WS-DEBUG] _process_and_submit_audio exception: {e}")
+
     async def _handle_audio(self, ws_id: str, msg: dict):
         action = msg["action"]
         # 取当前 ws 的 client 元数据（含 room_id / user_id，由前序 join 设置）
@@ -417,24 +533,17 @@ class WebSocketGatewayServer:
             audio_b64 = msg.get("audio")
             if not audio_b64:
                 return
+
+            # 性能修复：audio_chunk 走 fire-and-forget，不阻塞主事件循环。
+            # 旧版 `await asyncio.to_thread(audio_processor.process, ...)` 让 WS 主循环
+            # 串行等待 VAD/降噪完成，多个 session 并发时 wsLoopLag 会飙到 600ms+ 且
+            # ASR 永远拿不到数据。现在主循环只做 base64 解码 + 投递任务，立即返回。
             audio_bytes = base64.b64decode(audio_b64)
             sample_rate = msg.get("sample_rate", 16000)
-            audio_np = np.frombuffer(audio_bytes, dtype=np.float32)
-            # 音频处理是同步 CPU 计算，放到线程执行，避免阻塞事件循环
-            processed = await asyncio.to_thread(self.audio_processor.process, audio_np, sample_rate)
-            # 关键：只要有音频帧进来（无论 VAD 是否判为语音），都要刷新 aggregator
-            # 的 last_update_time。否则用户句中换气时模型会返回 text=''，
-            # aggregator 看到空文本不更新 last_update_time，silence_timeout 误判句尾。
-            self.transcript_aggregator.touch_session(session_id)
-            if not processed.get("is_speech", True):
-                return
-            self.asr_worker.submit_audio(
-                session_id=session_id,
-                audio_data=processed["audio"].tobytes(),
-                sample_rate=processed["sample_rate"],
-                timestamp=int(time.time() * 1000),
+            # 投递到线程池，不 await 结果
+            asyncio.ensure_future(
+                self._process_and_submit_audio(session_id, audio_bytes, sample_rate)
             )
-            self.session_manager.update_session_activity(session_id)
 
         elif action == "end_session":
             session_id = msg.get("session_id")
