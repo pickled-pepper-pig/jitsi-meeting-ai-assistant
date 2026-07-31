@@ -22,6 +22,7 @@ from app.meeting_state import (
     claim_moderator,
     get_first_moderator,
     get_ai_bot,
+    check_name_conflict,
 )
 from app.audit_log import get_logs as get_audit_logs
 
@@ -140,6 +141,14 @@ def join_meeting():
     if not room_id or not user_id:
         return jsonify({"error": "roomId 和 userId 必填"}), 400
 
+    # 用户名查重：同一 userId 视为重连，允许同名
+    conflict = check_name_conflict(room_id, user_id, user_name or "")
+    if conflict:
+        return jsonify({
+            "error": "name_conflict",
+            "message": conflict,
+        }), 409
+
     if as_moderator:
         claim = claim_moderator(room_id, user_id, user_name)
         if not claim["ok"]:
@@ -151,6 +160,8 @@ def join_meeting():
                 "currentModeratorName": claim.get("firstModeratorName"),
             }), 409
         token = generate_moderator_token(room_id, user_id, user_name)
+        # 主持人也写入 participants 表，用于后续 join 的名字查重
+        add_participant(room_id, {"id": user_id, "name": user_name, "role": "moderator"})
         return jsonify({
             "token": token,
             "role": "moderator",
@@ -159,8 +170,8 @@ def join_meeting():
         })
     else:
         token = generate_participant_token(room_id, user_id, user_name)
-        # 在 meeting_state 中顺便把参会者落表（如果存在房间）
-        get_or_create_meeting(room_id)
+        # 在 meeting_state 中顺便把参会者落表（用于后续 join 的名字查重）
+        add_participant(room_id, {"id": user_id, "name": user_name, "role": "participant"})
         return jsonify({
             "token": token,
             "role": "participant",

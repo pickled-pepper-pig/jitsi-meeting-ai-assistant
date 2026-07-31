@@ -123,6 +123,20 @@ def get_all_messages(room_id: str) -> List[Dict[str, Any]]:
     return list(meeting["messages"])
 
 
+def clear_messages(room_id: str) -> None:
+    """清空房间的历史消息，seq 归零
+
+    用于主持人「创建会议」时清空上一轮会议的纪要，
+    让本次会议的所有人（含后加入者）都从空纪要开始。
+    """
+    with _lock:
+        meeting = get_or_create_meeting(room_id)
+        meeting["messages"] = []
+        meeting["seq"] = 0
+        _save_to_redis(room_id, meeting)
+        logger.info(f"[meeting_state] 已清空房间 {room_id} 的历史消息")
+
+
 def end_meeting(room_id: str) -> None:
     """结束会议"""
     with _lock:
@@ -197,6 +211,34 @@ def add_participant(room_id: str, participant: Dict[str, Any]) -> None:
         _save_to_redis(room_id, meeting)
 
 
+def check_name_conflict(room_id: str, user_id: str, user_name: str) -> Optional[str]:
+    """检查房间内用户名是否重复。
+
+    返回：
+      - None：无冲突，可以使用该名字
+      - str：冲突信息，说明该名字已被谁占用（用于前端提示）
+
+    规则：
+      - 同一 userId 视为重连，允许同名（刷新页面场景）
+      - 主持人名字也参与查重（避免参会者用主持人名字）
+      - 不同 userId 用了同名 → 冲突
+    """
+    if not user_name:
+        return None
+    with _lock:
+        meeting = get_or_create_meeting(room_id)
+        # 检查主持人名字
+        mod_name = meeting.get("firstModeratorName")
+        mod_id = meeting.get("firstModeratorId")
+        if mod_name and mod_name == user_name and mod_id and mod_id != user_id:
+            return f"主持人「{mod_name}」已在会议中，请换一个名字"
+        # 检查其他参会者名字
+        for p in meeting["participants"]:
+            if p.get("name") == user_name and p.get("id") != user_id and not p.get("leftAt"):
+                return f"参会者「{user_name}」已在会议中，请换一个名字"
+        return None
+
+
 # ---------------------------------------------------------------------------
 # 主持人占位（一个房间只有一个主持人）
 # ---------------------------------------------------------------------------
@@ -217,10 +259,16 @@ def claim_moderator(room_id: str, user_id: str, user_name: Optional[str] = None)
         meeting = get_or_create_meeting(room_id)
         current = meeting.get("firstModeratorId")
         if not current:
+            # 首次认领 = 主持人「创建会议」：清空上一轮会议的历史纪要，
+            # 让本次会议的所有人（含后加入者）都从空纪要开始。
+            # 重连场景（current == user_id）不清空。
             meeting["firstModeratorId"] = user_id
             if user_name:
                 meeting["firstModeratorName"] = user_name
+            meeting["messages"] = []
+            meeting["seq"] = 0
             _save_to_redis(room_id, meeting)
+            logger.info(f"[meeting_state] 主持人 {user_name or user_id} 创建会议 {room_id}，已清空历史纪要")
             return {
                 "ok": True,
                 "firstModeratorId": user_id,
