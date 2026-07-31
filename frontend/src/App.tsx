@@ -7,7 +7,6 @@ import { useWebSocket } from './hooks/useWebSocket';
 import { MessageBuffer } from './utils/messageBuffer';
 import { ChatMessage, ServerMessage } from './types';
 import { getJitsiDomain, getJitsiProtocol, API_CONFIG } from './config';
-import { AudioCaptureService } from './services/audioCapture';
 import { ParticipantAudioReceiver, ParticipantTrackInfo } from './services/participantAudioReceiver';
 import { AudioCaptureState } from './services/audioTypes';
 import './App.css';
@@ -57,7 +56,6 @@ export default function App() {
 
   const tokenRef = useRef<string>('');
   const userIdRef = useRef<string>('');
-  const audioServiceRef = useRef<AudioCaptureService | null>(null);
   // 标记"当前用户是否就是开启 AI 的人"——区分自己开 vs 别人开后只能查看
   const isBotOperatorRef = useRef<boolean>(false);
   // 多路远程音频采集器：每个参会者一个 session + 一个 ws
@@ -163,9 +161,10 @@ export default function App() {
             // 收到 final：清掉之前的 partial
             setRemotePartial(null);
             setMessages(prev => {
-              // 去重：同 speaker + 同内容 + 1s 内的视为同一条
+              // 去重：同内容 + 1.5s 内视为重复（跨链路去重：主持人本端 audioCapture 也可能产生同一条）
+              // 不要求 sender 完全相等：本路径 sender=wei（主持人），本端路径可能 sender=wei
               const last = prev[prev.length - 1];
-              if (last && last.sender === speakerName && last.content === t.text && Math.abs(last.timestamp - ts) < 1000) {
+              if (last && last.content === t.text && Math.abs(last.timestamp - ts) < 1500) {
                 return prev;
               }
               return [...prev, {
@@ -217,6 +216,12 @@ export default function App() {
     });
     if (res.status === 409) {
       const data = await res.json().catch(() => ({}));
+      if (data?.error === 'name_conflict') {
+        const err: Error & { code?: string } = new Error(data.message || '该用户名已在会议中');
+        err.code = 'name_conflict';
+        throw err;
+      }
+      // 默认 409 视为 moderator_occupied
       const err: Error & { code?: string; currentModeratorId?: string } = new Error(
         data.message || '此房间已有人以主持人身份加入',
       );
@@ -308,9 +313,28 @@ export default function App() {
         setShowModeratorOccupied(true);
         return;
       }
+      if (err?.code === 'name_conflict') {
+        alert(err.message || '该用户名已在会议中，请换一个名字');
+        return;
+      }
       alert('无法连接到后端服务，请检查网络');
     }
   };
+
+  // 刷新页面后自动重新加入会议：URL 里带 room + name 时触发
+  // 用 ref 存 handleJoin 避免 useEffect 依赖重建导致的重复触发
+  const handleJoinRef = useRef(handleJoin);
+  handleJoinRef.current = handleJoin;
+  useEffect(() => {
+    const r = getUrlParam('room');
+    const n = getUrlParam('name');
+    if (r && n) {
+      console.log('[App] 检测到 URL 带 room + name，自动重新加入会议');
+      handleJoinRef.current();
+    }
+    // 只在挂载时跑一次
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleIncomingMessage = useCallback((sender: string, message: string, _timestamp: string) => {
     send({
@@ -353,10 +377,7 @@ export default function App() {
   }, [send, roomName]);
 
   const handleLeave = async () => {
-    if (audioServiceRef.current) {
-      await audioServiceRef.current.stop();
-      audioServiceRef.current = null;
-    }
+    // 离开时不再需要停 audioService（已改为 Bot 统一采集，前端无本地采集）
     send({ action: 'leave', roomId: roomName });
     setJoined(false);
     setAiEnabled(false);
@@ -425,58 +446,21 @@ export default function App() {
       alert('只有主持人可以开启 AI 语音识别');
       return;
     }
-    // 不再因为本人麦克风静音而拦截开启 AI：
-    // 麦克风静音只是"是否上传本人音频"的开关，不影响 AI 功能的总开关；
-    // 静音中开启后，本端 audio_chunk 不上传，但其他未静音参会者照常转写。
     updateBotStatus('starting');
 
     try {
-      // 直接连接后端 WebSocket 服务（不走 Vite 代理）
-      const wsUrl = API_CONFIG.wsUrl;
-
-      const audioService = new AudioCaptureService({
-        roomId: roomName,
-        participantId: userIdRef.current,
-        participantName: displayName,
-        wsUrl,
-        token: tokenRef.current,
-      });
-
-      audioServiceRef.current = audioService;
-      audioService.subscribe((state) => {
-        setAudioState(state);
-        // 主持人本人收到的 final → 直接进消息列表（不通过 Socket.IO 中转）
-        if (state.transcripts.length > 0) {
-          const latestTranscript = state.transcripts[state.transcripts.length - 1];
-          if (latestTranscript.text && latestTranscript.type === 'final') {
-            const speakerName = tagModerator(latestTranscript.participantName || 'AI 转写');
-            setMessages(prev => {
-              const lastMsg = prev[prev.length - 1];
-              if (lastMsg && lastMsg.sender === speakerName && lastMsg.content === latestTranscript.text) {
-                return prev;
-              }
-              return [...prev, {
-                id: `transcript-${latestTranscript.timestamp}`,
-                seq: Date.now(),
-                roomId: roomName,
-                sender: speakerName,
-                content: latestTranscript.text,
-                timestamp: latestTranscript.timestamp,
-                type: 'text' as const,
-              }];
-            });
-          }
-        }
-      });
-      await audioService.start();
       isBotOperatorRef.current = true;
 
-      // 调用后端 spawn Meeting Agent Bot
-      // 但 ParticipantAudioReceiver 在 iframe 模式下拿不到远端 track，
-      // 由 Bot 在 Playwright 里加入会议采音，多 Speaker 才能区分。
+      // 只 spawn Meeting Agent Bot，由 Bot 在 Playwright 里统一采集所有参会者音频
+      // （包括主持人自己）。不再启动浏览器本端 AudioCaptureService——否则主持人语音
+      // 会被浏览器 + Bot 各采一遍，导致 transcript 重复且去重困难（ASR 识别有微小差异）。
+      // Bot 采到的音频走 /ws/recorder/* → ingest_bot_audio → ASR，所有 transcript 通过
+      // meeting_transcript 事件广播给房间所有人（包括主持人自己）。
       try {
         const token = tokenRef.current;
-        const roomUrl = `${getJitsiProtocol()}://${getJitsiDomain()}/${roomName}`;
+        // getJitsiProtocol() 返回 'https:'（带冒号，与 window.location.protocol 一致），
+        // 拼接时只需一个 '/'，否则会变成 'https:://...'
+        const roomUrl = `${getJitsiProtocol()}//${getJitsiDomain()}/${roomName}`;
         const spawnRes = await fetch(
           `${API_CONFIG.baseUrl}/api/meetings/${roomName}/bot/spawn`,
           {
@@ -495,23 +479,8 @@ export default function App() {
         console.warn('[App] Bot spawn 异常:', e);
       }
 
-      // 启动多路远程音频采集器 + 接入当前已存在的 remote audio tracks
-      const receiver = new ParticipantAudioReceiver();
-      await receiver.initialize();
-      participantAudioReceiverRef.current = receiver;
-      const pending = pendingRemoteAudioRef.current;
-      for (const [pid, info] of pending.entries()) {
-        // local 的 track 由 audioCapture 处理，不重复接
-        if (info.track.readyState === 'live') {
-          // 跳过 local（pending 里也可能有 local，用 jid 前缀判断；这里用 userIdRef 简单排除）
-          if (pid !== userIdRef.current) {
-            await attachRemoteTrack(pid, info.participantName, info.track);
-          }
-        }
-      }
-
       updateBotStatus('started');
-      console.log('[App] AI Bot 已启动，本地 + 远程参会者音频采集中...');
+      console.log('[App] AI Bot 已启动，Bot 统一采集所有参会者音频');
     } catch (err) {
       console.error('[App] AI Bot 启动失败:', err);
       isBotOperatorRef.current = false;
@@ -524,20 +493,10 @@ export default function App() {
     if (!isBotOperatorRef.current) return;  // 旁观者没权利停
     updateBotStatus('stopping');
     try {
-      // 停止本地采集
-      await audioServiceRef.current?.stop();
-      audioServiceRef.current = null;
       setAudioState(null);
-      // 停止所有远程采集（每个 session 的 ws 会在 stopCapture 中关闭）
-      if (participantAudioReceiverRef.current) {
-        await participantAudioReceiverRef.current.stopAll();
-        await participantAudioReceiverRef.current.destroy();
-        participantAudioReceiverRef.current = null;
-      }
       setRemoteCaptureCount(0);
 
       // 调用后端 kill Meeting Agent Bot
-      // （停止前端的 audioCapture 不会自动停止 Bot，必须显式 kill）
       try {
         const token = tokenRef.current;
         await fetch(
@@ -626,7 +585,7 @@ export default function App() {
           </div>
 
           <button className="join-btn" onClick={handleJoin}>
-            加入会议
+            {isModerator ? '创建会议' : '加入会议'}
           </button>
 
           <div className="tips">
