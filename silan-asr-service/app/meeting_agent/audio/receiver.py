@@ -291,6 +291,19 @@ async def handle_recorder_ws(ws, path: str, gateway=None):
                         )
                     except Exception as e:
                         logger.error(f"[AudioReceiver] finalize on disconnect error: {e}")
+        # Bot WS 断开 → 标记 bot 状态为 failed（Chromium 可能还活着，但 recorder 链路已断）
+        # 健康检查会在下一轮把 page 也关掉并最终清理
+        if bot is not None:
+            try:
+                # get_bot_manager 已在模块顶部 import，这里直接用
+                bm = get_bot_manager()
+                current = bm.get_bot(bot.meeting_id)
+                if current and current.bot_id == bot.bot_id and current.status == "running":
+                    current.status = "failed"
+                    current.error = "Recorder WS 断开"
+                    logger.warning(f"[AudioReceiver] Bot {bot.bot_id} WS 断开，标记 failed")
+            except Exception as e:
+                logger.warning(f"[AudioReceiver] 标记 bot failed 异常: {e}")
         logger.info(f"[AudioReceiver] Bot 断开: path={path}")
 
 

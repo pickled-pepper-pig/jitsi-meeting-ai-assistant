@@ -68,11 +68,13 @@ class BrowserController:
                 self._playwright = await async_playwright().start()
 
             # 构造注入页 URL（带参数，URL 编码保证 JWT / 特殊字符安全）
+            # 注意：room_url 用 safe='' 全编码，URLSearchParams.get 会自动解码
+            # 之前 safe=':' 导致 :// 变 :%2F%2F，recorder.html 拿到的 room_url 是坏的
             ws_url = _build_recorder_ws_url(meeting_id)
             file_url = f"file://{RECORDER_HTML_PATH.absolute()}"
             params = (
                 f"?meeting_id={quote(meeting_id, safe='')}"
-                f"&room_url={quote(room_url, safe=':')}"
+                f"&room_url={quote(room_url, safe='')}"
                 f"&bot_jwt={quote(bot_jwt, safe='')}"
                 f"&bot_token={quote(bot_token, safe='')}"
                 f"&ws_url={quote(ws_url, safe='')}"
