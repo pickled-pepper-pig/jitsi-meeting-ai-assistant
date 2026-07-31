@@ -229,6 +229,17 @@
       throw new Error('加载 lib-jitsi-meet 失败: ' + e.message);
     }
 
+    // 拦截 RTCPeerConnection 构造器，把 PC 暴露到全局（诊断用）
+    const OriginalPC = window.RTCPeerConnection;
+    window._jitsiPCs = [];
+    window.RTCPeerConnection = function(...args) {
+      const pc = new OriginalPC(...args);
+      window._jitsiPCs.push(pc);
+      window._jitsiPC = pc;  // 保留最新的
+      return pc;
+    };
+    window.RTCPeerConnection.prototype = OriginalPC.prototype;
+
     // 2. 初始化 AudioContext（目标 16kHz）
     audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
     audioContextRate = audioContext.sampleRate;
@@ -236,6 +247,15 @@
       log(`⚠ AudioContext 实际采样率: ${audioContextRate}Hz，将自动重采样到 16kHz`, 'info');
     } else {
       log(`AudioContext 采样率: ${audioContextRate}Hz ✓`, 'debug');
+    }
+    // 关键：AudioContext 默认是 suspended，WebRTC 远端音频无法解码
+    // 在无用户手势的 Bot 环境下，必须主动 resume 才能驱动 ScriptProcessor
+    if (audioContext.state === 'suspended') {
+      audioContext.resume().then(() => {
+        log(`AudioContext resumed: state=${audioContext.state}`, 'ok');
+      }).catch((e) => {
+        log(`AudioContext resume 失败: ${e}`, 'warn');
+      });
     }
 
     // 3. 初始化 JitsiMeetJS
@@ -272,7 +292,8 @@
       jitsiConference = jitsiConnection.initJitsiConference(meetingId, {
         p2p: { enabled: false },
         configOverwrite: {
-          startWithAudioMuted: true,
+          // 不设 startWithAudioMuted/startWithVideoMuted：
+          // startWithAudioMuted: true 会让 Jitsi SFU 认为该 participant 不需要音频转发
           startWithVideoMuted: true,
         },
       });
@@ -282,8 +303,18 @@
       // === USER_JOINED ===
       jitsiConference.on(confEvents.USER_JOINED, (userId, displayName) => {
         // 兼容 lib-jitsi-meet 新版：第二参数可能是字符串也可能是对象
-        const name = typeof displayName === 'string' ? displayName
-                   : (displayName?.displayName || displayName?.name || '未知参与者');
+        let name = typeof displayName === 'string' ? displayName
+                 : (displayName?.displayName || displayName?.name || '');
+        // 新版 lib-jitsi-meet USER_JOINED 第二个参数是 JID 字符串（不是 displayName），
+        // 需要从 conference 主动查询拿到真实 displayName
+        if (!name || name.indexOf('@') >= 0) {
+          try {
+            const p = jitsiConference.getParticipantById(userId);
+            const dn = p?.getDisplayName?.() || p?._displayName || '';
+            if (dn) name = dn;
+          } catch {}
+        }
+        if (!name) name = '未知参与者';
         if (userId === myUserId) {
           log(`✅ Bot 已加入会议 (${userId})`, 'ok');
           setStatus(`已加入会议 ${meetingId}，等待远程音轨`, 'ok');
@@ -335,6 +366,32 @@
 
       log('加入会议...', 'info');
       jitsiConference.join();
+
+      // 关键：创建一个静音的 local audio track 并 publish 到 conference。
+      // Jitsi SFU 在 participant 没有 publish 任何 track 时，不会为它建立
+      // audio receiver transceiver，导致 remote audio track 虽然 readyState=live
+      // 但 RTP 流不转发 → onaudioprocess 拿到全 0 PCM。
+      // 解决：用 fake device 创建一个 muted audio track publish 出去，
+      // SFU 就会为 Bot 建立完整 transceiver，开始转发其他人的 audio。
+      JitsiMeetJS.createLocalTracks({
+        devices: ['audio'],
+        fakeDeviceMedia: true,  // 用 fake device（Chromium --use-fake-device-for-media-stream）
+      })
+        .then((tracks) => {
+          const audioTrack = tracks.find((t) => t.getType() === 'audio');
+          if (audioTrack) {
+            // 静音 Bot 自己的 mic，不让 Bot 声音进会议
+            // lib-jitsi-meet API: track.mute() 返回 Promise
+            if (typeof audioTrack.mute === 'function') {
+              audioTrack.mute().catch(() => {});
+            }
+            jitsiConference.addTrack(audioTrack);
+            log('已 publish 静音 local audio track，触发 SFU audio 转发', 'ok');
+          }
+        })
+        .catch((err) => {
+          log('创建 local audio track 失败: ' + err, 'warn');
+        });
     });
 
     jitsiConnection.addEventListener(connEvents.CONNECTION_FAILED, (err) => {
@@ -360,11 +417,79 @@
 
     const info = participantMap.get(participantId) || { name: '未知参与者' };
     log(`🎤 开始捕获 ${info.name} 的远程音频轨 (trackId=${mediaTrack.id})`, 'ok');
+
+    // 兜底：如果 participantMap 里没 displayName，从 conference 主动查
+    if (info.name === '未知参与者') {
+      try {
+        const p = jitsiConference?.getParticipantById?.(participantId);
+        const dn = p?.getDisplayName?.() || p?._displayName || '';
+        if (dn) {
+          info.name = dn;
+          participantMap.set(participantId, { ...info });
+          log(`🖍 修正 participant 名字: ${participantId} → ${dn}`, 'ok');
+        }
+      } catch {}
+    }
+
+    // 诊断：3 秒后查 RTCRtpReceiver.getStats，看是否真的收到 audio bytes
+    setTimeout(async () => {
+      try {
+        const pc = window._jitsiPC;
+        if (!pc) {
+          log('诊断: 无 PC 全局变量，跳过 getStats', 'warn');
+          return;
+        }
+        // 检查所有 receiver 的 track 状态
+        const receivers = pc.getReceivers();
+        receivers.forEach((r) => {
+          if (r.track && r.track.kind === 'audio') {
+            log(`诊断 receiver: track.id=${r.track.id}, kind=${r.track.kind}, muted=${r.track.muted}, readyState=${r.track.readyState}, enabled=${r.track.enabled}`, 'info');
+          }
+        });
+        const stats = await pc.getStats();
+        let found = false;
+        stats.forEach((report) => {
+          if (report.type === 'inbound-rtp' && report.kind === 'audio' && report.ssrc) {
+            found = true;
+            log(`诊断 inbound-rtp: ssrc=${report.ssrc}, bytes=${report.bytesReceived}, pkts=${report.packetsReceived}, lost=${report.packetsLost}, audioLevel=${report.audioLevel}, totalAudioEnergy=${report.totalAudioEnergy}`, 'info');
+          }
+        });
+        if (!found) log('诊断: 没有 audio inbound-rtp 报告', 'warn');
+      } catch (e) {
+        log('诊断 getStats 失败: ' + e, 'warn');
+      }
+    }, 3000);
+
+    // 第二次诊断：8 秒后再查一次，对比 bytes 是否增长
+    setTimeout(async () => {
+      try {
+        const pc = window._jitsiPC;
+        if (!pc) return;
+        const stats = await pc.getStats();
+        stats.forEach((report) => {
+          if (report.type === 'inbound-rtp' && report.kind === 'audio' && report.ssrc) {
+            log(`诊断(8s) inbound-rtp: ssrc=${report.ssrc}, bytes=${report.bytesReceived}, pkts=${report.packetsReceived}, audioLevel=${report.audioLevel}, totalAudioEnergy=${report.totalAudioEnergy}`, 'info');
+          }
+        });
+      } catch (e) {}
+    }, 8000);
+
     startCapture(mediaTrack, participantId, info.name);
   }
 
   function startCapture(mediaTrack, participantId, participantName) {
     const stream = new MediaStream([mediaTrack]);
+
+    // 关键修复：先 attach 到 <audio> 元素并 play，
+    // 让 Chrome 内部音频解码 pipeline 真正启动（不 attach 只连 Web Audio 的 destination
+    // 在无 audio output device 的 Playwright 环境下不会驱动解码 → PCM 全 0）
+    const audioEl = document.createElement('audio');
+    audioEl.srcObject = stream;
+    audioEl.muted = false;  // 关键：muted=false 让浏览器真的解码并输出
+    audioEl.volume = 0;     // 但音量设为 0，避免实际外放（没人能听见）
+    audioEl.play().catch((e) => log(`audio.play 失败: ${e}`, 'warn'));
+    log(`已 attach <audio> 强制解码: pid=${participantId}`, 'ok');
+
     const sourceNode = audioContext.createMediaStreamSource(stream);
     const processor = audioContext.createScriptProcessor(4096, 1, 1);
     const muteGain = audioContext.createGain();
@@ -375,6 +500,18 @@
     processor.onaudioprocess = (e) => {
       if (!captureMap.has(participantId)) return;
       const rawInput = e.inputBuffer.getChannelData(0);
+
+      // 调试：每 50 帧打印一次输入幅值，判断是否真的收到音频
+      if (!processor._dbgCount) processor._dbgCount = 0;
+      processor._dbgCount++;
+      if (processor._dbgCount % 50 === 1) {
+        let maxAbs = 0;
+        for (let i = 0; i < rawInput.length; i++) {
+          const v = Math.abs(rawInput[i]);
+          if (v > maxAbs) maxAbs = v;
+        }
+        log(`onaudioprocess: pid=${participantId}, samples=${rawInput.length}, maxAbs=${maxAbs.toFixed(4)}`, maxAbs > 0.001 ? 'info' : 'warn');
+      }
 
       // 重采样到 16kHz
       let input;

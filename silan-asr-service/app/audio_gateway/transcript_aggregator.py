@@ -93,8 +93,15 @@ class TranscriptAggregator:
         participant_name: str,
         meeting_id: str,
     ) -> None:
-        """注册新会话"""
+        """注册会话（幂等：已存在则只更新 participant_name，不覆盖 buffer）"""
         with self._lock:
+            existing = self._buffers.get(session_id)
+            if existing is not None:
+                # 已注册：只更新名称（可能之前是 "未知参与者"）
+                if participant_name and existing.participant_name != participant_name:
+                    existing.participant_name = participant_name
+                    logger.info(f"[Aggregator] Updated session name: {session_id} → {participant_name}")
+                return
             self._buffers[session_id] = UtteranceBuffer(
                 session_id=session_id,
                 participant_id=participant_id,

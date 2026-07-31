@@ -213,8 +213,20 @@ class ASRWorker:
     
     def _process_single(self, task: AudioTask) -> Optional[dict]:
         try:
+            # 兼容两种 PCM 编码：
+            #  - Float32 LE（-1.0~1.0）：audioCapture 主路径
+            #  - Int16 LE（-32768~32767）：ParticipantAudioReceiver / Bot recorder
+            # 服务端统一按 Float32 拆；若数值范围 << 1e-3 说明是 Int16 误拆，重拆
             audio_np = np.frombuffer(task.audio_data, dtype=np.float32)
-            
+            if audio_np.size > 0:
+                # Int16 误拆成 Float32 后：
+                #  - 典型幅值可能在 1e-38（极小）或 1e+38（爆 Float32 范围）
+                #  - 正常 Float32 PCM 在 [-1.0, 1.0]，max_abs 应该在 [0, 1]
+                max_abs_original = float(np.nanmax(np.abs(audio_np)))
+                if max_abs_original < 1e-3 or max_abs_original > 1.0 or np.isnan(max_abs_original):
+                    audio_int16 = np.frombuffer(task.audio_data, dtype=np.int16)
+                    audio_np = audio_int16.astype(np.float32) / 32768.0
+
             logger.info(f"Processing audio: session={task.session_id}, samples={len(audio_np)}, sr={task.sample_rate}")
             
             if task.sample_rate != 16000:

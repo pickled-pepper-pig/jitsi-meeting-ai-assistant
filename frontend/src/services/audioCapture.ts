@@ -300,6 +300,18 @@ export class AudioCaptureService {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
     if (!this.sessionId) return;
 
+    // 调试：每 50 帧打印一次 PCM 幅值（判断 mic 是否真的采到声音）
+    if (!this._dbgCount) this._dbgCount = 0;
+    this._dbgCount++;
+    if (this._dbgCount % 50 === 1) {
+      let maxAbs = 0;
+      for (let i = 0; i < pcmData.length; i++) {
+        const v = Math.abs(pcmData[i]);
+        if (v > maxAbs) maxAbs = v;
+      }
+      console.log(`[AudioCapture] sendAudioChunk #${this._dbgCount} samples=${pcmData.length} maxAbs=${maxAbs.toFixed(4)} ${maxAbs > 0.001 ? '(有声音)' : '(静音)'}`);
+    }
+
     this.ws.send(JSON.stringify({
       action: 'audio_chunk',
       session_id: this.sessionId,
@@ -307,6 +319,8 @@ export class AudioCaptureService {
       sample_rate: this.config.sampleRate,
     }));
   }
+
+  private _dbgCount: number = 0;
 
   private handleServerMessage(data: string): void {
     try {

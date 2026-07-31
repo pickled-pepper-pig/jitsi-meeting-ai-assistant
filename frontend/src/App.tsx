@@ -31,6 +31,24 @@ export default function App() {
   const [showModeratorOccupied, setShowModeratorOccupied] = useState(false);
   const [moderatorOccupiedMessage, setModeratorOccupiedMessage] = useState('');
   const [botStatus, setBotStatus] = useState<'idle' | 'starting' | 'started' | 'stopping'>('idle');
+  // 解决 React 闭包陷阱：handleTrackAdded 用 ref 取最新值，而不是闭包旧值
+  const botStatusRef = useRef<'idle' | 'starting' | 'started' | 'stopping'>('idle');
+  const updateBotStatus = (status: typeof botStatusRef.current) => {
+    botStatusRef.current = status;
+    setBotStatus(status);
+  };
+
+  // 给 speaker 名字加主持人标注（仅在自己作为主持人的本地视角生效）
+  // 其他参会者看到的字幕里仍只是名字，无主持人身份信息
+  const tagModerator = (speaker: string): string => {
+    if (!isModerator) return speaker;
+    if (!speaker) return speaker;
+    const localName = displayName.trim();
+    if (localName && speaker === localName) {
+      return `${speaker}（主持人）`;
+    }
+    return speaker;
+  };
   const [audioState, setAudioState] = useState<AudioCaptureState | null>(null);
   // 旁观者侧收到的实时 partial 转写（来自操作者的 ASR 流）
   const [remotePartial, setRemotePartial] = useState<{ text: string; participant: string } | null>(null);
@@ -123,11 +141,11 @@ export default function App() {
         } else if (message.status === 'started') {
           // 别人开启的 → 旁观者视角
           isBotOperatorRef.current = false;
-          setBotStatus('started');
+          updateBotStatus('started');
         } else if (message.status === 'idle') {
           // 任何人关闭都会收到
           isBotOperatorRef.current = false;
-          setBotStatus('idle');
+          updateBotStatus('idle');
         }
         break;
       case 'meeting_transcript':
@@ -140,7 +158,7 @@ export default function App() {
             timestamp?: number;
           };
           if (t.text) {
-            const speakerName = t.participant_name || 'AI 转写';
+            const speakerName = tagModerator(t.participant_name || 'AI 转写');
             const ts = t.timestamp || Date.now();
             // 收到 final：清掉之前的 partial
             setRemotePartial(null);
@@ -175,7 +193,7 @@ export default function App() {
           if (t.text) {
             setRemotePartial({
               text: t.text,
-              participant: t.participant_name || 'AI 转写',
+              participant: tagModerator(t.participant_name || 'AI 转写'),
             });
           }
         }
@@ -342,7 +360,7 @@ export default function App() {
     send({ action: 'leave', roomId: roomName });
     setJoined(false);
     setAiEnabled(false);
-    setBotStatus('idle');
+    updateBotStatus('idle');
     setAudioState(null);
     messageBufferRef.current.clear();
     setMessages([]);
@@ -361,8 +379,9 @@ export default function App() {
       participantName: info.participantName,
       track: info.track,
     });
-    // bot 已启动 + 是 remote audio → 立即接入
-    if (info.local === false && botStatus === 'started' && participantAudioReceiverRef.current) {
+    console.log(`[App] TRACK_ADDED: pid=${info.participantId}, name=${info.participantName}, local=${info.local}, botStatus=${botStatusRef.current}, hasReceiver=${!!participantAudioReceiverRef.current}`);
+    // bot 已启动 + 是 remote audio → 立即接入（用 ref 解决闭包陷阱）
+    if (info.local === false && botStatusRef.current === 'started' && participantAudioReceiverRef.current) {
       void attachRemoteTrack(info.participantId, info.participantName, info.track);
     }
   };
@@ -409,7 +428,7 @@ export default function App() {
     // 不再因为本人麦克风静音而拦截开启 AI：
     // 麦克风静音只是"是否上传本人音频"的开关，不影响 AI 功能的总开关；
     // 静音中开启后，本端 audio_chunk 不上传，但其他未静音参会者照常转写。
-    setBotStatus('starting');
+    updateBotStatus('starting');
 
     try {
       // 直接连接后端 WebSocket 服务（不走 Vite 代理）
@@ -430,7 +449,7 @@ export default function App() {
         if (state.transcripts.length > 0) {
           const latestTranscript = state.transcripts[state.transcripts.length - 1];
           if (latestTranscript.text && latestTranscript.type === 'final') {
-            const speakerName = latestTranscript.participantName || 'AI 转写';
+            const speakerName = tagModerator(latestTranscript.participantName || 'AI 转写');
             setMessages(prev => {
               const lastMsg = prev[prev.length - 1];
               if (lastMsg && lastMsg.sender === speakerName && lastMsg.content === latestTranscript.text) {
@@ -452,6 +471,30 @@ export default function App() {
       await audioService.start();
       isBotOperatorRef.current = true;
 
+      // 调用后端 spawn Meeting Agent Bot
+      // 但 ParticipantAudioReceiver 在 iframe 模式下拿不到远端 track，
+      // 由 Bot 在 Playwright 里加入会议采音，多 Speaker 才能区分。
+      try {
+        const token = tokenRef.current;
+        const roomUrl = `${getJitsiProtocol()}://${getJitsiDomain()}/${roomName}`;
+        const spawnRes = await fetch(
+          `${API_CONFIG.baseUrl}/api/meetings/${roomName}/bot/spawn`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ token, roomUrl }),
+          },
+        );
+        if (!spawnRes.ok) {
+          console.warn('[App] Bot spawn 失败:', await spawnRes.text());
+        } else {
+          const spawnData = await spawnRes.json();
+          console.log('[App] Bot 已启动:', spawnData.botId);
+        }
+      } catch (e) {
+        console.warn('[App] Bot spawn 异常:', e);
+      }
+
       // 启动多路远程音频采集器 + 接入当前已存在的 remote audio tracks
       const receiver = new ParticipantAudioReceiver();
       await receiver.initialize();
@@ -467,19 +510,19 @@ export default function App() {
         }
       }
 
-      setBotStatus('started');
+      updateBotStatus('started');
       console.log('[App] AI Bot 已启动，本地 + 远程参会者音频采集中...');
     } catch (err) {
       console.error('[App] AI Bot 启动失败:', err);
       isBotOperatorRef.current = false;
-      setBotStatus('idle');
+      updateBotStatus('idle');
     }
   };
 
   const handleStopBot = async () => {
     if (botStatus !== 'started') return;
     if (!isBotOperatorRef.current) return;  // 旁观者没权利停
-    setBotStatus('stopping');
+    updateBotStatus('stopping');
     try {
       // 停止本地采集
       await audioServiceRef.current?.stop();
@@ -492,13 +535,31 @@ export default function App() {
         participantAudioReceiverRef.current = null;
       }
       setRemoteCaptureCount(0);
+
+      // 调用后端 kill Meeting Agent Bot
+      // （停止前端的 audioCapture 不会自动停止 Bot，必须显式 kill）
+      try {
+        const token = tokenRef.current;
+        await fetch(
+          `${API_CONFIG.baseUrl}/api/meetings/${roomName}/bot/kill`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ token }),
+          },
+        );
+        console.log('[App] Bot kill 请求已发送');
+      } catch (e) {
+        console.warn('[App] Bot kill 异常:', e);
+      }
+
       isBotOperatorRef.current = false;
-      setBotStatus('idle');
+      updateBotStatus('idle');
       console.log('[App] AI Bot 已停止');
     } catch (err) {
       console.error('[App] AI Bot 停止失败:', err);
       isBotOperatorRef.current = false;
-      setBotStatus('idle');
+      updateBotStatus('idle');
     }
   };
 
@@ -615,6 +676,7 @@ export default function App() {
         remoteCaptureCount={remoteCaptureCount}
         remotePartial={remotePartial}
         participantsCount={participantsCount}
+        tagModerator={tagModerator}
       />
       <button className="leave-btn" onClick={handleLeave}>
         离开会议

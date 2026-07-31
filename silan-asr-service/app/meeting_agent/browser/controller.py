@@ -79,8 +79,11 @@ class BrowserController:
             )
             page_url = file_url + params
 
+            # 临时：用 headless=False 验证 Bot 能拿到真实音频
+            # （旧版 headless=True 在 Mac 上会让 WebRTC 远端 audio track 不产 PCM 帧 → 全 0 静音）
+            # 验证通过后再想办法切 headless + 虚拟音频设备
             browser = await self._playwright.chromium.launch(
-                headless=True,
+                headless=False,
                 args=[
                     "--use-fake-ui-for-media-stream",
                     "--use-fake-device-for-media-stream",
@@ -104,6 +107,14 @@ class BrowserController:
 
             await page.goto(page_url, wait_until="domcontentloaded")
             logger.info(f"[Bot-{bot_id}] 已加载 recorder.html: {page_url}")
+
+            # 模拟用户手势以激活 AudioContext（Chrome autoplay policy 要求）
+            # 不点的话 audioContext.resume() 在无手势上下文中会被拒绝
+            try:
+                await page.click("body", timeout=2000)
+                logger.info(f"[Bot-{bot_id}] 模拟 click 激活 AudioContext")
+            except Exception as e:
+                logger.warning(f"[Bot-{bot_id}] 模拟 click 失败（不影响后续）: {e}")
 
             self._browsers[bot_id] = BrowserHandle(
                 bot_id=bot_id,

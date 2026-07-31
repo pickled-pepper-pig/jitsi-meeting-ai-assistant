@@ -6,6 +6,21 @@ import { MessageList } from './MessageList';
 import { SummaryButton } from './SummaryButton';
 import { ComplianceNotice } from './ComplianceNotice';
 
+// 根据 speaker 名字生成稳定的颜色（与 MessageList 保持一致的调色板）
+// 莫兰迪色系：低饱和、带灰调；稍加深保证在浅色背景上可读
+const SPEAKER_COLORS = [
+  '#5B7A8C', '#6B8E7A', '#A8896E', '#7D6E8C', '#A8706E',
+  '#5E8B8E', '#7E8C5E', '#A36E5E', '#6E6E8C', '#5E8E7E',
+];
+
+function getSpeakerColor(speaker: string): string {
+  let hash = 0;
+  for (let i = 0; i < speaker.length; i++) {
+    hash = (hash * 31 + speaker.charCodeAt(i)) >>> 0;
+  }
+  return SPEAKER_COLORS[hash % SPEAKER_COLORS.length];
+}
+
 interface SidebarProps {
   messages: ChatMessage[];
   onSummarize: () => void;
@@ -23,6 +38,8 @@ interface SidebarProps {
   remotePartial?: { text: string; participant: string } | null;
   // 真实参会者数量（含自己，来自 Jitsi IFrame API）
   participantsCount?: number;
+  // 主持人名字标注函数（在自己作为主持人的本地视角下，给自己消息加 "（主持人）" 后缀）
+  tagModerator?: (name: string) => string;
 }
 
 export function Sidebar({
@@ -40,6 +57,7 @@ export function Sidebar({
   remoteCaptureCount = 0,
   remotePartial = null,
   participantsCount = 0,
+  tagModerator = (s) => s,
 }: SidebarProps) {
   const statusText: Record<ConnectionStatus, string> = {
     connected: '已连接',
@@ -156,10 +174,19 @@ export function Sidebar({
         <div className="partial-transcript">
           <div className="partial-header">
             <span className="partial-dot"></span>
-            <span className="partial-speaker">
-              {remotePartial ? remotePartial.participant : audioState?.partialParticipant}
-            </span>
-            <span className="partial-label">正在说...</span>
+            {(() => {
+              const rawSpeaker = remotePartial ? remotePartial.participant : (audioState?.partialParticipant || '');
+              const speaker = tagModerator(rawSpeaker);
+              const color = speaker ? getSpeakerColor(speaker) : undefined;
+              return (
+                <>
+                  <span className="partial-speaker" style={color ? { color } : undefined}>
+                    {speaker}
+                  </span>
+                  <span className="partial-label">正在说...</span>
+                </>
+              );
+            })()}
           </div>
           <div className="partial-text">
             {remotePartial ? remotePartial.text : audioState?.partialText}

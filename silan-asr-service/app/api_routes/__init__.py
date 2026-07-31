@@ -382,7 +382,6 @@ def bot_spawn(room_id: str):
         user_id=f"ai-bot-{int(time.time()*1000)}",
         user_name="AI Assistant",
         role="moderator",        # Bot 仍以 moderator 进会议（拿 owner）
-        affiliation="owner",
     )
 
     try:
@@ -454,3 +453,42 @@ def bot_list():
     bot_manager = get_bot_manager()
     bots = bot_manager.list_bots()
     return jsonify({"bots": [b.to_dict() for b in bots]})
+
+
+# ---------------------------------------------------------------------------
+# 调试：原始音频 dump（Bot 落盘的 Int16 LE WAV 文件下载/列出）
+# 用于排查 ASR 输入原始音频形态，不进入生产路径
+# ---------------------------------------------------------------------------
+
+@api_bp.route("/api/debug/raw-audio/<meeting_id>", methods=["GET"])
+def debug_list_raw_audio(meeting_id: str):
+    """列出某会议在 recordings/ 下落盘的 WAV 文件（Bot 路径）"""
+    from pathlib import Path
+    base = Path("recordings") / meeting_id
+    if not base.exists():
+        return jsonify({"meeting_id": meeting_id, "files": []})
+    files = []
+    for p in sorted(base.glob("*.wav")):
+        st = p.stat()
+        files.append({
+            "name": p.name,
+            "path": str(p),
+            "size_bytes": st.st_size,
+            "mtime": int(st.st_mtime * 1000),
+            "download_url": f"/api/debug/raw-audio/{meeting_id}/{p.name}",
+        })
+    return jsonify({"meeting_id": meeting_id, "files": files})
+
+
+@api_bp.route("/api/debug/raw-audio/<meeting_id>/<filename>", methods=["GET"])
+def debug_download_raw_audio(meeting_id: str, filename: str):
+    """下载会议下指定的 WAV 文件（限制在 recordings/{meeting_id}/ 内，防穿越）"""
+    from pathlib import Path
+    from flask import send_file, abort
+    # 防止 path traversal：只允许 recordings/{meeting_id}/{filename}
+    if "/" in filename or ".." in filename or "\\" in filename:
+        abort(400, description="非法文件名")
+    p = Path("recordings") / meeting_id / filename
+    if not p.exists() or not p.is_file():
+        abort(404, description="文件不存在")
+    return send_file(str(p), mimetype="audio/wav", as_attachment=True, download_name=filename)

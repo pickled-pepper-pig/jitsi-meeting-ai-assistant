@@ -252,8 +252,12 @@ export function useJitsiApi(options: JitsiOptions, callbacks: JitsiEventCallback
         // 任何参与者发布/移除轨道（本地 + 远程；audio + video）
         // 通过这里把 Jitsi 的 MediaStreamTrack 暴露给上层，让上层决定要不要采集
         api.addListener('trackAdded', (e: any) => {
+          console.log('[useJitsiApi] trackAdded event:', JSON.stringify({ participantId: e?.participantId, participantDisplayName: e?.participantDisplayName, type: e?.type, kind: e?.track?.kind, local: e?.local, hasTrack: !!e?.track }));
           const track: MediaStreamTrack | undefined = e?.track;
-          if (!track) return;
+          if (!track) {
+            console.warn('[useJitsiApi] trackAdded 但 e.track 为空', e);
+            return;
+          }
           const kind = (track.kind || e?.type || 'video') as 'audio' | 'video';
           callbacksRef.current.onTrackAdded?.({
             participantId: e?.participantId || '',

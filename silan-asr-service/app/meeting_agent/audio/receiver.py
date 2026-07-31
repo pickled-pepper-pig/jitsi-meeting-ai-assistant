@@ -45,7 +45,7 @@ def _get_wav_pool() -> WavWriterPool:
     return _wav_pool
 
 
-async def handle_recorder_ws(ws, path: str):
+async def handle_recorder_ws(ws, path: str, gateway=None):
     """WebSocket 入口：path 形如 /ws/recorder/{meeting_id}
 
     浏览器连上后会先发一条 hello 消息：
@@ -55,10 +55,13 @@ async def handle_recorder_ws(ws, path: str):
       { "type": "welcome", "meetingId": "...", "botId": "..." }
 
     然后浏览器持续推 audio_chunk / participant_joined 等事件。
+
+    gateway: 由 WebSocketGatewayServer 注入。如果提供，audio_chunk 会通过
+    gateway.ingest_bot_audio() 走统一 ASR Pipeline（复用 asr_worker + aggregator + 广播）。
     """
     # 从 path 提取 meeting_id（兼容 websockets 库的 path 属性）
     path_meeting_id = _extract_meeting_id(path)
-    logger.info(f"[AudioReceiver] Bot 连接: path={path}, meetingId={path_meeting_id}")
+    logger.info(f"[AudioReceiver] Bot 连接: path={path}, meetingId={path_meeting_id}, has_gateway={gateway is not None}")
 
     bot_manager = get_bot_manager()
     bot = None
@@ -142,7 +145,7 @@ async def handle_recorder_ws(ws, path: str):
                     }))
 
             # ----------------------------------------------------------
-            # participant_left：标记离开，关闭对应 WAV
+            # participant_left：标记离开，关闭对应 WAV + ASR session
             # ----------------------------------------------------------
             elif msg_type == "participant_left":
                 participant_id = msg.get("participantId", "")
@@ -154,6 +157,15 @@ async def handle_recorder_ws(ws, path: str):
                     # 关闭该 speaker 的 WAV 文件
                     _get_wav_pool().close(bot.meeting_id, state.speaker_id)
                     logger.info(f"[AudioReceiver] 参会者离开: {participant_id} (speaker={state.speaker_id})")
+                # 结束该 participant 的 ASR session
+                if gateway is not None:
+                    try:
+                        gateway.finalize_bot_session(
+                            meeting_id=bot.meeting_id,
+                            participant_id=participant_id,
+                        )
+                    except Exception as e:
+                        logger.error(f"[AudioReceiver] finalize_bot_session error: {e}")
 
             # ----------------------------------------------------------
             # track_capture_started：标记参会者有音频轨
@@ -192,13 +204,18 @@ async def handle_recorder_ws(ws, path: str):
                     )
 
             # ----------------------------------------------------------
-            # audio_chunk：解析 PCM，落 WAV
+            # audio_chunk：解析 PCM，落 WAV + 推 ASR Pipeline
             # ----------------------------------------------------------
             elif msg_type == "audio_chunk":
                 try:
                     chunk = AudioChunk.from_ws_message(msg)
                 except (KeyError, ValueError) as e:
                     logger.warning(f"[AudioReceiver] audio_chunk 解析失败: {e}")
+                    continue
+
+                # Bot 自身音轨过滤（第一层：Bot 端已做，此处为兜底）
+                if bot is not None and chunk.participant_id == bot.bot_id:
+                    logger.debug(f"[AudioReceiver] 丢弃 Bot 自身音轨: {chunk.participant_id}")
                     continue
 
                 # 填充 speaker_id（服务端分配，不可伪造）
@@ -215,7 +232,7 @@ async def handle_recorder_ws(ws, path: str):
 
                 chunk.speaker_id = state.speaker_id
 
-                # 落 WAV
+                # 落 WAV（录音归档用途，P1 可选保留）
                 _get_wav_pool().write(
                     meeting_id=bot.meeting_id,
                     speaker_id=state.speaker_id,
@@ -223,8 +240,19 @@ async def handle_recorder_ws(ws, path: str):
                     sample_rate=chunk.sample_rate,
                 )
 
-                # Day 2 接 ASR：此处把 chunk 推入 ASR 队列
-                # TODO: await asr_queue.submit(chunk)
+                # 推入统一 ASR Pipeline（Bot 只负责采集，不直接接触 ASR 细节）
+                if gateway is not None:
+                    try:
+                        gateway.ingest_bot_audio(
+                            meeting_id=bot.meeting_id,
+                            participant_id=chunk.participant_id,
+                            display_name=state.display_name or "Unknown",
+                            pcm=chunk.pcm,
+                            sample_rate=chunk.sample_rate,
+                            source="bot",
+                        )
+                    except Exception as e:
+                        logger.error(f"[AudioReceiver] ingest_bot_audio error: {e}")
 
                 # 调试日志：每 50 个块打一次，含 sequence 用于丢包检测
                 if chunk.sequence % 50 == 0:
@@ -255,6 +283,14 @@ async def handle_recorder_ws(ws, path: str):
             for pid, state in list(bot.participants.items()):
                 if state.speaker_id:
                     _get_wav_pool().close(bot.meeting_id, state.speaker_id)
+                # 结束 ASR session
+                if gateway is not None and pid:
+                    try:
+                        gateway.finalize_bot_session(
+                            meeting_id=bot.meeting_id, participant_id=pid
+                        )
+                    except Exception as e:
+                        logger.error(f"[AudioReceiver] finalize on disconnect error: {e}")
         logger.info(f"[AudioReceiver] Bot 断开: path={path}")
 
 
