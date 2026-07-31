@@ -23,6 +23,8 @@ from app.meeting_state import (
     get_first_moderator,
     get_ai_bot,
     check_name_conflict,
+    meeting_exists,
+    end_meeting,
 )
 from app.audit_log import get_logs as get_audit_logs
 
@@ -155,7 +157,7 @@ def join_meeting():
             moderator_name = claim.get("firstModeratorName") or claim["firstModeratorId"]
             return jsonify({
                 "error": "moderator_occupied",
-                "message": f"此房间已有「{moderator_name}」以主持人身份加入，不能再以主持人身份加入",
+                "message": f"「{moderator_name}」已是本会议主持人。如需加入，请取消勾选「以主持人身份加入」后再试。",
                 "currentModeratorId": claim["firstModeratorId"],
                 "currentModeratorName": claim.get("firstModeratorName"),
             }), 409
@@ -167,8 +169,16 @@ def join_meeting():
             "role": "moderator",
             "roomId": room_id,
             "userId": user_id,
+            "reconnect": claim.get("reconnect", False),
+            "history_cleared": claim.get("history_cleared", False),
         })
     else:
+        # 非主持人加入：必须先有主持人创建会议
+        if not meeting_exists(room_id):
+            return jsonify({
+                "error": "meeting_not_exists",
+                "message": f"会议「{room_id}」尚未创建，请先以主持人身份创建会议",
+            }), 404
         token = generate_participant_token(room_id, user_id, user_name)
         # 在 meeting_state 中顺便把参会者落表（用于后续 join 的名字查重）
         add_participant(room_id, {"id": user_id, "name": user_name, "role": "participant"})
@@ -295,6 +305,44 @@ def ai_status(room_id: str):
         "participants": meeting["participants"],
         "asrSessions": meeting["asrSessions"],
     })
+
+
+@api_bp.route("/api/meetings/<room_id>/end", methods=["POST"])
+def end_meeting_api(room_id: str):
+    """结束会议：仅主持人可调。释放主持人占位 + 清空参会者，
+    使同一主持人重新进入时被视为「创建新会议」，自动清空上一轮纪要。"""
+    data = request.get_json(silent=True) or {}
+    token = data.get("token")
+    if not token:
+        return jsonify({"error": "token 必填"}), 400
+    payload = verify_token(token)
+    if not payload or payload.get("room") != room_id:
+        return jsonify({"error": "token 无效或与房间不匹配"}), 401
+    if payload.get("role") != "moderator":
+        return jsonify({"error": "只有主持人可以结束会议"}), 403
+    end_meeting(room_id)
+    return jsonify({"ok": True, "roomId": room_id})
+
+
+@api_bp.route("/api/meetings/<room_id>/clear-history", methods=["POST"])
+def clear_history_api(room_id: str):
+    """清空会议纪要：仅主持人可调。
+    用于异常退出（关浏览器/刷新）后重连时，主持人主动清空上一轮纪要。"""
+    data = request.get_json(silent=True) or {}
+    token = data.get("token")
+    if not token:
+        return jsonify({"error": "token 必填"}), 400
+    payload = verify_token(token)
+    if not payload or payload.get("room") != room_id:
+        return jsonify({"error": "token 无效或与房间不匹配"}), 401
+    if payload.get("role") != "moderator":
+        return jsonify({"error": "只有主持人可以清空纪要"}), 403
+    meeting = get_or_create_meeting(room_id)
+    meeting["messages"] = []
+    meeting["seq"] = 0
+    from app.meeting_state import _save_to_redis
+    _save_to_redis(room_id, meeting)
+    return jsonify({"ok": True, "roomId": room_id})
 
 
 # ---------------------------------------------------------------------------

@@ -16,10 +16,6 @@ const SPEAKER_COLORS = [
   '#7D6E8C', // 灰紫
   '#A8706E', // 豆沙红
   '#5E8B8E', // 灰青
-  '#7E8C5E', // 橄榄灰
-  '#A36E5E', // 砖红灰
-  '#6E6E8C', // 暮色蓝
-  '#5E8E7E', // 灰湖绿
 ];
 
 function getSpeakerColor(sender: string): string {

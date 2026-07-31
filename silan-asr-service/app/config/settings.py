@@ -12,7 +12,14 @@ RESOURCES_DIR = PROJECT_ROOT / "resources" / "vocab"
 class AudioProcessorConfig:
     sample_rate: int = 16000
     channel_count: int = 1
-    vad_threshold: float = 0.001
+    # VAD 配置
+    # vad_threshold > 0 时启用 VAD：
+    #   - vad_model == "silero"  → 用 Silero VAD 神经网络（精度高，CPU 也能跑）
+    #   - 其它值                   → 回退到能量阈值（兼容老配置）
+    vad_threshold: float = 0.5          # Silero 语音概率阈值（0-1，越大越严格）
+    vad_model: str = "silero"           # "silero" | "energy"
+    vad_min_speech_ms: int = 250        # 短于该时长的语音片段忽略（过滤噪声）
+    vad_min_silence_ms: int = 100       # 连续静音多久判定句尾
     agc_enabled: bool = False  # 浏览器 getUserMedia 已做 AGC，后端不再重复处理
     denoise_enabled: bool = False  # 浏览器已做降噪
     echo_cancel_enabled: bool = False

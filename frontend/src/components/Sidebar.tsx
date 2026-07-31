@@ -9,8 +9,7 @@ import { ComplianceNotice } from './ComplianceNotice';
 // 根据 speaker 名字生成稳定的颜色（与 MessageList 保持一致的调色板）
 // 莫兰迪色系：低饱和、带灰调；稍加深保证在浅色背景上可读
 const SPEAKER_COLORS = [
-  '#5B7A8C', '#6B8E7A', '#A8896E', '#7D6E8C', '#A8706E',
-  '#5E8B8E', '#7E8C5E', '#A36E5E', '#6E6E8C', '#5E8E7E',
+  '#5B7A8C', '#6B8E7A', '#A8896E', '#7D6E8C', '#A8706E', '#5E8B8E',
 ];
 
 function getSpeakerColor(speaker: string): string {
@@ -34,8 +33,11 @@ interface SidebarProps {
   botStatus?: 'idle' | 'starting' | 'started' | 'stopping';
   audioState?: AudioCaptureState | null;
   remoteCaptureCount?: number;
-  // 旁观者侧收到的实时 partial 转写（来自操作者的 ASR）
-  remotePartial?: { text: string; participant: string } | null;
+  // 多 speaker 实时 partial：按 participant_id 聚合，支持用户点击头像聚焦某个 speaker
+  remotePartials?: Record<string, { text: string; name: string; id: string; ts: number }>;
+  // 用户选中聚焦查看的 participant_id；null 表示自动跟随最新说话的人
+  focusedSpeakerId?: string | null;
+  onFocusSpeaker?: (id: string | null) => void;
   // 真实参会者数量（含自己，来自 Jitsi IFrame API）
   participantsCount?: number;
   // 主持人名字标注函数（在自己作为主持人的本地视角下，给自己消息加 "（主持人）" 后缀）
@@ -55,7 +57,9 @@ export function Sidebar({
   botStatus = 'idle',
   audioState,
   remoteCaptureCount = 0,
-  remotePartial = null,
+  remotePartials = {},
+  focusedSpeakerId = null,
+  onFocusSpeaker,
   participantsCount = 0,
   tagModerator = (s) => s,
 }: SidebarProps) {
@@ -169,29 +173,62 @@ export function Sidebar({
 
       <MessageList messages={messages} />
 
-      {/* 实时转写指示器 - 显示当前正在说的内容 */}
-      {(audioState?.partialText || remotePartial) && (
-        <div className="partial-transcript">
-          <div className="partial-header">
-            <span className="partial-dot"></span>
-            {(() => {
-              const rawSpeaker = remotePartial ? remotePartial.participant : (audioState?.partialParticipant || '');
-              const speaker = tagModerator(rawSpeaker);
-              const color = speaker ? getSpeakerColor(speaker) : undefined;
-              return (
+      {/* 实时转写指示器 - 多 speaker 头像列表 + 选中聚焦查看 */}
+      {Object.keys(remotePartials).length > 0 && (
+        (() => {
+          // 头像列表按"首次说话"顺序展示（Object.values 保持插入序，不重排），
+          // 避免 partial 更新时头像跳来跳去。
+          const speakers = Object.values(remotePartials);
+          // 聚焦展示谁：用户选中 > 自动跟随最新（按最新 ts 选）
+          const latest = speakers.reduce((a, b) => (a.ts >= b.ts ? a : b), speakers[0]);
+          const focusedId = focusedSpeakerId && remotePartials[focusedSpeakerId]
+            ? focusedSpeakerId
+            : latest?.id;
+          const focused = focusedId ? remotePartials[focusedId] : null;
+          return (
+            <div className="partial-transcript">
+              {/* speaker 头像列表 */}
+              <div className="partial-speakers">
+                {speakers.map((s) => {
+                  const color = getSpeakerColor(s.name);
+                  const isActive = s.id === focusedId;
+                  const initial = (s.name || '?').charAt(0).toUpperCase();
+                  return (
+                    <button
+                      key={s.id}
+                      className={`speaker-chip ${isActive ? 'speaker-chip-active' : ''}`}
+                      onClick={() => onFocusSpeaker?.(isActive ? null : s.id)}
+                      title={isActive ? `取消聚焦（${s.name}）` : `聚焦 ${s.name}`}
+                    >
+                      <span
+                        className="speaker-avatar"
+                        style={{ backgroundColor: color }}
+                      >
+                        {initial}
+                      </span>
+                      <span className="speaker-name" style={{ color }}>{s.name}</span>
+                    </button>
+                  );
+                })}
+              </div>
+              {/* 聚焦 speaker 的实时文本 */}
+              {focused && (
                 <>
-                  <span className="partial-speaker" style={color ? { color } : undefined}>
-                    {speaker}
-                  </span>
-                  <span className="partial-label">正在说...</span>
+                  <div className="partial-header">
+                    <span className="partial-dot"></span>
+                    <span className="partial-speaker" style={{ color: getSpeakerColor(focused.name) }}>
+                      {focused.name}
+                    </span>
+                    <span className="partial-label">正在说...</span>
+                  </div>
+                  <div className="partial-text">
+                    {focused.text}
+                  </div>
                 </>
-              );
-            })()}
-          </div>
-          <div className="partial-text">
-            {remotePartial ? remotePartial.text : audioState?.partialText}
-          </div>
-        </div>
+              )}
+            </div>
+          );
+        })()
       )}
 
       {isModerator && (

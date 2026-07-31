@@ -179,8 +179,8 @@ body {
 
 /* ===== 侧边栏 ===== */
 .sidebar {
-  width: 380px;
-  min-width: 380px;
+  width: 460px;
+  min-width: 460px;
   display: flex;
   flex-direction: column;
   background: #fafbfc;
@@ -639,6 +639,58 @@ body {
   margin-bottom: 6px;
 }
 
+/* 多 speaker 头像列表 */
+.partial-speakers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.speaker-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px 4px 4px;
+  border: 1.5px solid transparent;
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.7);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  outline: none;
+}
+
+.speaker-chip:hover {
+  background: rgba(255, 255, 255, 0.95);
+  transform: translateY(-1px);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
+}
+
+.speaker-chip-active {
+  background: #fff;
+  border-color: #0ea5e9;
+  box-shadow: 0 2px 8px rgba(14, 165, 233, 0.25);
+}
+
+.speaker-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.speaker-name {
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
 .partial-dot {
   width: 8px;
   height: 8px;
@@ -803,7 +855,7 @@ body {
 .leave-btn {
   position: absolute;
   top: 12px;
-  right: 392px;
+  right: 472px;
   padding: 8px 16px;
   background: rgba(239, 68, 68, 0.9);
   color: #fff;

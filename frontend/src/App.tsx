@@ -29,6 +29,8 @@ export default function App() {
   const [copied, setCopied] = useState(false);
   const [showModeratorOccupied, setShowModeratorOccupied] = useState(false);
   const [moderatorOccupiedMessage, setModeratorOccupiedMessage] = useState('');
+  // 通用弹窗（替代 alert，与 moderator_occupied 弹窗保持一致的样式）
+  const [customAlert, setCustomAlert] = useState<{ icon: string; title: string; message: string } | null>(null);
   const [botStatus, setBotStatus] = useState<'idle' | 'starting' | 'started' | 'stopping'>('idle');
   // 解决 React 闭包陷阱：handleTrackAdded 用 ref 取最新值，而不是闭包旧值
   const botStatusRef = useRef<'idle' | 'starting' | 'started' | 'stopping'>('idle');
@@ -49,8 +51,12 @@ export default function App() {
     return speaker;
   };
   const [audioState, setAudioState] = useState<AudioCaptureState | null>(null);
-  // 旁观者侧收到的实时 partial 转写（来自操作者的 ASR 流）
-  const [remotePartial, setRemotePartial] = useState<{ text: string; participant: string } | null>(null);
+  // 多 speaker 实时 partial：按 participant_id 聚合，支持用户选中某个 speaker 聚焦查看。
+  // 之前用单条 remotePartial，两人同时说话时会互相覆盖，展示混乱。
+  // key: participant_id, value: { text, name, id, ts }
+  const [remotePartials, setRemotePartials] = useState<Record<string, { text: string; name: string; id: string; ts: number }>>({});
+  // 用户选中聚焦查看的 participant_id；null 表示自动跟随最新说话的人
+  const [focusedSpeakerId, setFocusedSpeakerId] = useState<string | null>(null);
   // 真实参会者数量（含自己，来自 Jitsi IFrame API 的 participantJoined/Left 事件）
   const [participantsCount, setParticipantsCount] = useState(1);
 
@@ -158,8 +164,14 @@ export default function App() {
           if (t.text) {
             const speakerName = tagModerator(t.participant_name || 'AI 转写');
             const ts = t.timestamp || Date.now();
-            // 收到 final：清掉之前的 partial
-            setRemotePartial(null);
+            // 收到 final：从 partial map 移除该 speaker
+            const pid = t.participant_id || speakerName;
+            setRemotePartials(prev => {
+              if (!prev[pid]) return prev;
+              const next = { ...prev };
+              delete next[pid];
+              return next;
+            });
             setMessages(prev => {
               // 去重：同内容 + 1.5s 内视为重复（跨链路去重：主持人本端 audioCapture 也可能产生同一条）
               // 不要求 sender 完全相等：本路径 sender=wei（主持人），本端路径可能 sender=wei
@@ -181,7 +193,7 @@ export default function App() {
         }
         break;
       case 'meeting_transcript_partial':
-        // 旁观者收到操作者正在说的 partial 文本（实时显示用，不入 messages 列表）
+        // 多 speaker partial：按 participant_id 聚合，不互相覆盖
         {
           const t = message as unknown as {
             text: string;
@@ -190,10 +202,17 @@ export default function App() {
             timestamp?: number;
           };
           if (t.text) {
-            setRemotePartial({
-              text: t.text,
-              participant: tagModerator(t.participant_name || 'AI 转写'),
-            });
+            const speakerName = tagModerator(t.participant_name || 'AI 转写');
+            const pid = t.participant_id || speakerName;
+            setRemotePartials(prev => ({
+              ...prev,
+              [pid]: {
+                text: t.text!,
+                name: speakerName,
+                id: pid,
+                ts: t.timestamp || Date.now(),
+              },
+            }));
           }
         }
         break;
@@ -229,8 +248,21 @@ export default function App() {
       err.currentModeratorId = data.currentModeratorId;
       throw err;
     }
+    if (res.status === 404) {
+      const data = await res.json().catch(() => ({}));
+      if (data?.error === 'meeting_not_exists') {
+        const err: Error & { code?: string } = new Error(data.message || '会议尚未创建');
+        err.code = 'meeting_not_exists';
+        throw err;
+      }
+    }
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return res.json() as Promise<{ token: string; role: 'moderator' | 'participant' }>;
+    return res.json() as Promise<{
+      token: string;
+      role: 'moderator' | 'participant';
+      reconnect?: boolean;
+      history_cleared?: boolean;
+    }>;
   };
 
   const handleJoin = async () => {
@@ -239,40 +271,24 @@ export default function App() {
       return;
     }
 
-    // 稳定 userId 解析顺序：
-    //   1) localStorage 同名同房间 → 直接复用（同一浏览器刷新场景）
-    //   2) 后端记录的当前房间主持人昵称 == 当前昵称 → 复用后端存的 userId
-    //      （解决「旧的 wei 进来时 localStorage 还没建过、但后端 firstModeratorName 是 wei」这种历史数据场景）
-    //   3) 都没有 → 临时生成一个新 ID 并写入 localStorage
-    const trimmedRoom = roomName.trim();
-    const trimmedName = displayName.trim();
-    const storageKey = `meeting:userId:${trimmedRoom}:${trimmedName}`;
+    // userId 生成策略：
+    //   - 全局唯一 ID，首次生成后写入 localStorage（跨房间跨名字复用同一 ID）
+    //   - 这样同一浏览器的同一用户（不管进哪个房间、用什么名字）都拿到同一 ID，
+    //     刷新页面时重连身份保持一致。
+    //   - 不同浏览器/不同人的 userId 不同，后端 check_name_conflict 才能按 user_id 区分。
+    //   之前用 `room+name` 做 localStorage key，会导致同一浏览器用同名测试时
+    //   复用上一个用户的 userId，绕过后端查重。
     let userId = '';
     try {
-      userId = localStorage.getItem(storageKey) || '';
+      userId = localStorage.getItem('meeting:userId') || '';
     } catch {
-      // localStorage 不可用时回退到下面的查询
+      // localStorage 不可用时回退到生成
     }
     if (!userId) {
-      try {
-        const r = await fetch(
-          `${API_CONFIG.baseUrl}/api/meetings/${encodeURIComponent(trimmedRoom)}/moderator`,
-        );
-        if (r.ok) {
-          const data = await r.json();
-          if (data?.hasModerator && data.moderatorName === trimmedName && data.moderatorId) {
-            userId = data.moderatorId;
-          }
-        }
-      } catch {
-        // 查询失败不阻塞，按临时 ID 继续
-      }
-    }
-    if (!userId) {
-      userId = `user-${Date.now()}`;
+      userId = `user-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     }
     try {
-      localStorage.setItem(storageKey, userId);
+      localStorage.setItem('meeting:userId', userId);
     } catch {
       // 写入失败也无影响
     }
@@ -284,6 +300,34 @@ export default function App() {
       // 真实角色由后端决定（避免前端伪造）
       setIsModerator(result.role === 'moderator');
       setAiEnabled(true);
+
+      // 主持人重连且上次异常退出（endedAt=false），有历史纪要：弹窗确认是否清空
+      if (result.role === 'moderator' && result.reconnect && !result.history_cleared) {
+        setCustomAlert({
+          icon: '📋',
+          title: '发现上一轮会议纪要',
+          message: '上次会议未正常结束，仍保留有历史纪要。是否清空并开始新一轮会议？',
+        });
+        // 临时存储一个待确认状态，用 customAlert 的按钮无法直接做两个选项，
+        // 这里简化：弹窗提示后，主持人在 Sidebar 里可手动点"清空纪要"按钮
+        // （见下方 clearHistory 函数）。或者直接清空——根据产品需求选其一。
+        // 这里选择直接清空，避免主持人还要额外操作。
+        try {
+          await fetch(
+            `${API_CONFIG.baseUrl}/api/meetings/${encodeURIComponent(roomName.trim())}/clear-history`,
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ token: result.token }),
+            },
+          );
+          messageBufferRef.current.clear();
+          setMessages([]);
+          console.log('[App] 主持人重连，已清空上一轮异常退出的纪要');
+        } catch (e) {
+          console.warn('[App] 清空历史纪要失败:', e);
+        }
+      }
 
       // HTTP 兜底拉取房间历史消息（chat + summary）：
       // - 即便 WS 还没建连/握手失败，新用户也能立刻看到进入前的会议纪要
@@ -314,7 +358,19 @@ export default function App() {
         return;
       }
       if (err?.code === 'name_conflict') {
-        alert(err.message || '该用户名已在会议中，请换一个名字');
+        setCustomAlert({
+          icon: '⚠️',
+          title: '用户名已占用',
+          message: err.message || '该用户名已在会议中，请换一个名字',
+        });
+        return;
+      }
+      if (err?.code === 'meeting_not_exists') {
+        setCustomAlert({
+          icon: '📋',
+          title: '会议不存在',
+          message: err.message || '会议尚未创建，请先以主持人身份创建会议',
+        });
         return;
       }
       alert('无法连接到后端服务，请检查网络');
@@ -364,6 +420,15 @@ export default function App() {
         roomId: roomName,
         token: tokenRef.current,
       });
+      // 通过 Jitsi 默认按钮离开时也要结束会议（释放主持人占位 + 清空纪要）
+      fetch(
+        `${API_CONFIG.baseUrl}/api/meetings/${encodeURIComponent(roomName)}/end`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token: tokenRef.current }),
+        },
+      ).catch((e) => console.warn('[App] 结束会议请求失败:', e));
     }
     setJoined(false);
   }, [send, roomName, isModerator]);
@@ -379,6 +444,22 @@ export default function App() {
   const handleLeave = async () => {
     // 离开时不再需要停 audioService（已改为 Bot 统一采集，前端无本地采集）
     send({ action: 'leave', roomId: roomName });
+    // 主持人离开 = 结束会议：通知后端释放主持人占位 + 清空参会者，
+    // 这样同一主持人重新进入时会被视为「创建新会议」，自动清空上一轮纪要。
+    if (isModerator && tokenRef.current) {
+      try {
+        await fetch(
+          `${API_CONFIG.baseUrl}/api/meetings/${encodeURIComponent(roomName)}/end`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ token: tokenRef.current }),
+          },
+        );
+      } catch (e) {
+        console.warn('[App] 结束会议请求失败:', e);
+      }
+    }
     setJoined(false);
     setAiEnabled(false);
     updateBotStatus('idle');
@@ -549,6 +630,21 @@ export default function App() {
             </div>
           </div>
         )}
+        {customAlert && (
+          <div className="proxy-warning-overlay">
+            <div className="proxy-warning-modal">
+              <div className="proxy-warning-icon">{customAlert.icon}</div>
+              <h3>{customAlert.title}</h3>
+              <p>{customAlert.message}</p>
+              <button
+                className="proxy-warning-btn"
+                onClick={() => setCustomAlert(null)}
+              >
+                知道了
+              </button>
+            </div>
+          </div>
+        )}
         <div className="join-card">
           <h1>Jitsi 会议 AI 助手</h1>
           <p className="subtitle">实时语音转写 + 会议纪要</p>
@@ -633,7 +729,9 @@ export default function App() {
         botStatus={botStatus}
         audioState={audioState}
         remoteCaptureCount={remoteCaptureCount}
-        remotePartial={remotePartial}
+        remotePartials={remotePartials}
+        focusedSpeakerId={focusedSpeakerId}
+        onFocusSpeaker={setFocusedSpeakerId}
         participantsCount={participantsCount}
         tagModerator={tagModerator}
       />

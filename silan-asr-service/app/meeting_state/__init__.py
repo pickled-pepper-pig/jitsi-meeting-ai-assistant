@@ -70,6 +70,19 @@ def _load_from_redis(room_id: str) -> Optional[Dict[str, Any]]:
 # 公共接口
 # ---------------------------------------------------------------------------
 
+def meeting_exists(room_id: str) -> bool:
+    """判断会议是否已存在（且被主持人创建过）。
+    规则：firstModeratorId 为空意味着还没人创建会议，视为不存在。"""
+    with _lock:
+        cached = _load_from_redis(room_id)
+        if cached:
+            return bool(cached.get("firstModeratorId"))
+        meeting = _meetings.get(room_id)
+        if meeting:
+            return bool(meeting.get("firstModeratorId"))
+        return False
+
+
 def get_or_create_meeting(room_id: str) -> Dict[str, Any]:
     """获取或创建会议状态"""
     with _lock:
@@ -138,10 +151,14 @@ def clear_messages(room_id: str) -> None:
 
 
 def end_meeting(room_id: str) -> None:
-    """结束会议"""
+    """结束会议：释放主持人占位，清空参会者列表。
+    这样同一主持人重新进入时会被视为「创建新会议」，自动清空上一轮纪要。"""
     with _lock:
         meeting = get_or_create_meeting(room_id)
         meeting["endedAt"] = True
+        meeting["firstModeratorId"] = None
+        meeting["firstModeratorName"] = None
+        meeting["participants"] = []
         _save_to_redis(room_id, meeting)
 
 
@@ -227,10 +244,15 @@ def check_name_conflict(room_id: str, user_id: str, user_name: str) -> Optional[
         return None
     with _lock:
         meeting = get_or_create_meeting(room_id)
-        # 检查主持人名字
+        # 检查主持人名字：只要有主持人同名就拒绝，不比较 user_id。
+        # 重连场景（同一 user_id）由 claim_moderator 的 current==user_id 单独处理，
+        # 不应该在这里放行——否则同一浏览器 localStorage 复用 userId 会绕过查重。
         mod_name = meeting.get("firstModeratorName")
-        mod_id = meeting.get("firstModeratorId")
-        if mod_name and mod_name == user_name and mod_id and mod_id != user_id:
+        if mod_name and mod_name == user_name:
+            # 例外：如果请求者就是主持人本人（user_id 匹配），允许重连
+            mod_id = meeting.get("firstModeratorId")
+            if mod_id and mod_id == user_id:
+                return None
             return f"主持人「{mod_name}」已在会议中，请换一个名字"
         # 检查其他参会者名字
         for p in meeting["participants"]:
@@ -275,10 +297,22 @@ def claim_moderator(room_id: str, user_id: str, user_name: Optional[str] = None)
                 "firstModeratorName": meeting.get("firstModeratorName"),
             }
         if current == user_id:
+            # 重连场景：根据上次会议是否正常结束决定是否清空纪要
+            ended = meeting.get("endedAt", False)
+            if ended:
+                # 上次已正常结束（点了离开/挂断），本次视为新一轮会议：清空纪要
+                meeting["messages"] = []
+                meeting["seq"] = 0
+                meeting["endedAt"] = False
+                meeting["participants"] = []
+                _save_to_redis(room_id, meeting)
+                logger.info(f"[meeting_state] 主持人 {user_name or user_id} 重连会议 {room_id}（上次已结束），清空历史纪要")
             return {
                 "ok": True,
                 "firstModeratorId": current,
                 "firstModeratorName": meeting.get("firstModeratorName"),
+                "reconnect": True,
+                "history_cleared": ended,
             }
         return {
             "ok": False,

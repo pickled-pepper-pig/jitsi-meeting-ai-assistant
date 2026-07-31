@@ -442,7 +442,7 @@ class WebSocketGatewayServer:
         try:
             audio_np = np.frombuffer(audio_bytes, dtype=np.float32)
             processed = await asyncio.to_thread(
-                self.audio_processor.process, audio_np, sample_rate
+                self.audio_processor.process, audio_np, sample_rate, session_id
             )
             # 关键：只要有音频帧进来（无论 VAD 是否判为语音），都要刷新 aggregator
             # 的 last_update_time。否则用户句中换气时模型会返回 text=''，
@@ -562,6 +562,8 @@ class WebSocketGatewayServer:
             self.transcript_aggregator.unregister_session(session_id)
             # 通知 ASR Worker 结束 session
             self.asr_worker.finalize_session(session_id)
+            # 释放 per-session VAD 状态
+            self.audio_processor.release_session(session_id)
         except Exception as e:
             logger.error(f"End session error: {e}")
         self.session_manager.close_session(session_id)

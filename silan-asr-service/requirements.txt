@@ -1,30 +1,32 @@
 # ============================================
 # SiLAN FunASR 实时会议转写服务 - 依赖
+# 版本基于当前运行环境锁定（2026-07-31）
 # ============================================
 
 # 语音识别核心
-funasr>=1.3.0
-torch>=2.0.0
-torchaudio>=2.0.0
+funasr==1.3.14
+torch==2.2.2
+torchaudio==2.2.2
+silero-vad==6.2.1
 
 # 数值计算
-numpy>=1.21.0,<2.0.0
-scipy>=1.7.0,<1.18.0
+numpy==1.26.4
+scipy==1.14.1
 
 # 音频处理
-pydub>=0.25.0
-soundfile>=0.12.0
-noisereduce>=2.0.0
+pydub==0.25.1
+soundfile==0.14.0
+noisereduce==3.0.3
 
 # Web 服务
-flask>=2.0.0
-flask-cors>=3.0.0
-flask-socketio>=5.0.0
-eventlet>=0.33.0
+flask==3.1.3
+flask-cors==6.0.5
+flask-socketio==5.6.1
+eventlet==0.41.1
 
 # 模型推理
-transformers>=4.30.0
-onnxruntime>=1.15.0
+transformers==4.46.3
+onnxruntime==1.23.2
 
 # 可选: Kafka 消息队列 (用于异步事件处理)
 # kafka-python>=2.0.0
