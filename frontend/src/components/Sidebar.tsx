@@ -40,8 +40,10 @@ interface SidebarProps {
   onFocusSpeaker?: (id: string | null) => void;
   // 真实参会者数量（含自己，来自 Jitsi IFrame API）
   participantsCount?: number;
-  // 主持人名字标注函数（在自己作为主持人的本地视角下，给自己消息加 "（主持人）" 后缀）
+  // 主持人名字标注函数
   tagModerator?: (name: string) => string;
+  // 离开会议回调
+  onLeave?: () => void;
 }
 
 export function Sidebar({
@@ -62,6 +64,7 @@ export function Sidebar({
   onFocusSpeaker,
   participantsCount = 0,
   tagModerator = (s) => s,
+  onLeave,
 }: SidebarProps) {
   const statusText: Record<ConnectionStatus, string> = {
     connected: '已连接',
@@ -98,6 +101,20 @@ export function Sidebar({
             <span className="status-dot"></span>
             {statusText[connectionStatus]}
           </span>
+          {onLeave && (
+            <button
+              className="leave-icon-btn"
+              onClick={onLeave}
+              title="离开会议"
+              aria-label="离开会议"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+                <polyline points="16 17 21 12 16 7" />
+                <line x1="21" y1="12" x2="9" y2="12" />
+              </svg>
+            </button>
+          )}
         </div>
       </div>
 
@@ -146,11 +163,6 @@ export function Sidebar({
                     </div>
                   </div>
                 )}
-                <p className="bot-tip">
-                  {botStatus === 'idle'
-                    ? '点击后开始 AI 实时转写'
-                    : '正在转写中，点击按钮可随时停止'}
-                </p>
               </>
             );
           })()

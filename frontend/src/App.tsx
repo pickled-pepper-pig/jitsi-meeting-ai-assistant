@@ -734,10 +734,8 @@ export default function App() {
         onFocusSpeaker={setFocusedSpeakerId}
         participantsCount={participantsCount}
         tagModerator={tagModerator}
+        onLeave={handleLeave}
       />
-      <button className="leave-btn" onClick={handleLeave}>
-        离开会议
-      </button>
     </div>
   );
 }

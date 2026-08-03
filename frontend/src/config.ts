@@ -37,7 +37,8 @@ function getBackendBaseUrl(): string {
 }
 
 function getBackendWsUrl(): string {
-  // 开发环境通过 Vite 代理 /ws 连接后端 WebSocket（避免 WSS/WS 协议不匹配）
+  // 开发环境通过 Vite 代理 /ws 连接后端 WebSocket
+  // Vite dev server 是 HTTPS（mkcert），必须用 wss://
   if (import.meta.env.DEV) {
     return `wss://${window.location.host}/ws`;
   }

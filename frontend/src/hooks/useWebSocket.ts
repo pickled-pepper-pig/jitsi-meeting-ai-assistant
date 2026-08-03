@@ -206,10 +206,16 @@ export function useWebSocket(options: UseWebSocketOptions) {
   const connect = useCallback((roomId: string, token: string) => {
     roomIdRef.current = roomId;
     tokenRef.current = token;
-    isManualCloseRef.current = false;
+    // 先标记手动关闭，避免旧 WS 的 onclose 触发重连
+    isManualCloseRef.current = true;
     if (wsRef.current) {
       wsRef.current.close();
+      wsRef.current = null;
     }
+    // 重置重连计数
+    reconnectAttemptsRef.current = 0;
+    // 下一轮再放开手动关闭标记，让新连接的 onclose 能正常触发重连
+    isManualCloseRef.current = false;
     doConnect(roomId, token);
   }, [doConnect]);
 
