@@ -33,6 +33,7 @@ from app.meeting_state import (
     get_all_messages,
     set_ai_bot,
     get_ai_bot,
+    get_asr_model,
 )
 from app.audit_log import audit_log
 from app.llm_service import generate_summary
@@ -220,11 +221,13 @@ class WebSocketGatewayServer:
 
         # 3. 喂给 ASR Worker（Aggregator 在 on_asr_result 中自动聚合）
         try:
+            asr_model = get_asr_model(meeting_id)
             self.asr_worker.submit_audio(
                 session_id=session_id,
                 audio_data=pcm,
                 sample_rate=sample_rate,
                 timestamp=int(time.time() * 1000),
+                asr_model=asr_model,
             )
         except Exception as e:
             logger.error(f"[Ingest] submit_audio error: {e}")

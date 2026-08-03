@@ -1,4 +1,5 @@
 import logging
+import re
 import threading
 import time
 import numpy as np
@@ -16,6 +17,7 @@ class AudioTask:
     audio_data: bytes
     sample_rate: int
     timestamp: int
+    asr_model: str = "paraformer-zh-streaming"
     callback: Optional[Callable] = None
 
 
@@ -33,12 +35,14 @@ class BatchScheduler:
         self._batch_callback = callback
     
     def submit(self, session_id: str, audio_data: bytes, sample_rate: int,
-               timestamp: int, callback: Optional[Callable] = None) -> None:
+               timestamp: int, asr_model: str = "paraformer-zh-streaming",
+               callback: Optional[Callable] = None) -> None:
         task = AudioTask(
             session_id=session_id,
             audio_data=audio_data,
             sample_rate=sample_rate,
             timestamp=timestamp,
+            asr_model=asr_model,
             callback=callback
         )
         
@@ -105,6 +109,10 @@ class ASRWorker:
         
         self.model = None
         self.punc_model = None  # 标点恢复模型
+        self.sensevoice_model = None  # SenseVoice-Small 模型（段批处理）
+        # SenseVoice 累积音频 buffer：session_id -> {pcm: np.ndarray, last_speech_time: float}
+        self._sv_buffers: Dict[str, dict] = {}
+        self._sv_lock = threading.Lock()
         self.session_states: Dict[str, object] = {}
         self._transcript_callback: Optional[Callable] = None
         
@@ -136,6 +144,22 @@ class ASRWorker:
             
             self.model = AutoModel(**model_args)
             logger.info(f"ASR model loaded successfully on {self.config.device}")
+
+            # 加载 SenseVoice-Small 模型（段批处理，非流式）
+            try:
+                logger.info("Loading SenseVoice-Small model: iic/SenseVoiceSmall")
+                sv_args = {
+                    "model": "iic/SenseVoiceSmall",
+                    "disable_pbar": True,
+                    "disable_update": True,
+                }
+                if self.config.device == "cuda":
+                    sv_args["device"] = "cuda"
+                self.sensevoice_model = AutoModel(**sv_args)
+                logger.info("SenseVoice-Small model loaded successfully")
+            except Exception as e:
+                logger.warning(f"Failed to load SenseVoice model, will fallback to Paraformer: {e}")
+                self.sensevoice_model = None
             
             # 加载标点恢复模型（CT-Transformer）
             try:
@@ -183,12 +207,14 @@ class ASRWorker:
         logger.info(f"ASR Worker {self.worker_id} stopped")
     
     def submit_audio(self, session_id: str, audio_data: bytes, 
-                     sample_rate: int = 16000, timestamp: int = 0) -> None:
+                     sample_rate: int = 16000, timestamp: int = 0,
+                     asr_model: str = "paraformer-zh-streaming") -> None:
         self.scheduler.submit(
             session_id=session_id,
             audio_data=audio_data,
             sample_rate=sample_rate,
-            timestamp=timestamp
+            timestamp=timestamp,
+            asr_model=asr_model,
         )
     
     def _process_batch(self, batch: list) -> None:
@@ -227,47 +253,181 @@ class ASRWorker:
                     audio_int16 = np.frombuffer(task.audio_data, dtype=np.int16)
                     audio_np = audio_int16.astype(np.float32) / 32768.0
 
-            logger.info(f"Processing audio: session={task.session_id}, samples={len(audio_np)}, sr={task.sample_rate}")
-            
             if task.sample_rate != 16000:
                 audio_np = self._resample(audio_np, task.sample_rate, 16000)
-            
-            if task.session_id not in self.session_states:
-                self.session_states[task.session_id] = {}
-                logger.info(f"Created new session state for {task.session_id}")
-            
-            result = self.model.generate(
-                input=audio_np,
-                cache=self.session_states[task.session_id],
-                is_final=False,
-                chunk_size=self.chunk_size,
-                encoder_chunk_look_back=self.encoder_chunk_look_back,
-                decoder_chunk_look_back=self.decoder_chunk_look_back,
-                use_itn=True,
-            )
 
-            logger.info(f"Model result: {result}")
+            # 根据会议选择的模型分流
+            if task.asr_model == "SenseVoiceSmall" and self.sensevoice_model is not None:
+                return self._process_sensevoice(task, audio_np)
             
-            if result and len(result) > 0:
-                text = result[0].get("text", "")
-                logger.info(f"Recognized text: '{text}'")
-                
-                # 如果有标点模型，对 final 文本进行标点恢复
-                # 注意：partial 结果不做标点恢复，避免性能开销
-                return {
-                    "session_id": task.session_id,
-                    "interim_text": text,  # partial 不带标点
-                    "final_text": "",
-                    "timestamp": task.timestamp,
-                    "confidence": result[0].get("confidence", 0.0)
-                }
-            return None
-        
+            # 默认走 Paraformer 流式
+            return self._process_paraformer(task, audio_np)
+
         except Exception as e:
             logger.error(f"Processing session {task.session_id} error: {e}")
             import traceback
             traceback.print_exc()
             return None
+
+    def _process_paraformer(self, task: AudioTask, audio_np: np.ndarray) -> Optional[dict]:
+        """Paraformer 流式处理（原有逻辑）"""
+        logger.info(f"Processing audio: session={task.session_id}, samples={len(audio_np)}, sr={task.sample_rate}")
+
+        if task.session_id not in self.session_states:
+            self.session_states[task.session_id] = {}
+            logger.info(f"Created new session state for {task.session_id}")
+
+        result = self.model.generate(
+            input=audio_np,
+            cache=self.session_states[task.session_id],
+            is_final=False,
+            chunk_size=self.chunk_size,
+            encoder_chunk_look_back=self.encoder_chunk_look_back,
+            decoder_chunk_look_back=self.decoder_chunk_look_back,
+            use_itn=True,
+        )
+
+        logger.info(f"Model result: {result}")
+
+        if result and len(result) > 0:
+            text = result[0].get("text", "")
+            logger.info(f"Recognized text: '{text}'")
+
+            return {
+                "session_id": task.session_id,
+                "interim_text": text,
+                "final_text": "",
+                "timestamp": task.timestamp,
+                "confidence": result[0].get("confidence", 0.0)
+            }
+        return None
+
+    def _process_sensevoice(self, task: AudioTask, audio_np: np.ndarray) -> Optional[dict]:
+        """SenseVoice 段批处理：累积音频，静音超时后整段识别
+        
+        工作方式：
+        1. 每个 chunk 累积到 session 的 buffer
+        2. 检测静音（能量 < 阈值持续 > 1s）
+        3. 静音触发：把累积的音频整段送 SenseVoice 识别
+        4. 识别结果作为 final 返回，清空 buffer
+        """
+        SV_SILENCE_THRESHOLD = 0.025  # 静音能量阈值（RMS）：噪声/呼吸声 < 此值视为静音
+        SV_SILENCE_DURATION = 1.5     # 静音持续多久触发识别（秒）
+        SV_MAX_BUFFER = 30.0          # buffer 最大时长（秒），超过强制识别
+        SV_MIN_SEGMENT_DURATION = 0.5  # 最短片段时长（秒），太短的跳过
+        SV_MIN_TEXT_LENGTH = 4        # 识别结果最短字符数（过滤"嗯"、"。"等碎片）
+        SV_MIN_SEGMENT_ENERGY = 0.020  # 片段整体最低 RMS 能量：低于此值视为纯噪声，不送识别
+        # 语音活动检测阈值（低于静音阈值，用于发 processing 信号）
+        # 只要有轻微语音能量就通知前端"正在说话"，不同于静音判定
+        SV_SPEECH_THRESHOLD = 0.010
+        # SenseVoice 典型幻觉碎片（≤5 字命中即过滤）
+        SV_HALLUCINATION_KEYWORDS = (
+            "嗯对", "对不去", "就清楚", "就天", "知楚", "便宜",
+            "屁弟", "出来", "嗯嗯", "在那个", "谢谢", "你好",
+            "就是", "然后", "好的", "可以",
+        )
+        SR = 16000
+
+        now = time.time()
+        # 检测当前 chunk 是否静音
+        energy = float(np.sqrt(np.mean(audio_np ** 2))) if audio_np.size > 0 else 0.0
+        is_silence = energy < SV_SILENCE_THRESHOLD
+        has_speech = energy >= SV_SPEECH_THRESHOLD
+
+        with self._sv_lock:
+            buf = self._sv_buffers.get(task.session_id)
+            if buf is None:
+                buf = {"pcm": np.array([], dtype=np.float32), "last_speech_time": now, "last_emit_time": 0.0}
+                self._sv_buffers[task.session_id] = buf
+
+            buf["pcm"] = np.concatenate([buf["pcm"], audio_np])
+
+            if not is_silence:
+                buf["last_speech_time"] = now
+
+            buffer_duration = len(buf["pcm"]) / SR
+            silence_elapsed = now - buf["last_speech_time"]
+            # 触发整段识别条件：静音超时 或 buffer 太长
+            should_emit = (is_silence and silence_elapsed >= SV_SILENCE_DURATION and buffer_duration > 0.5) or \
+                          (buffer_duration >= SV_MAX_BUFFER)
+
+            if not should_emit:
+                # 有人在说话（检测到语音能量）且 buffer 已积累 0.5s+：发 processing 信号
+                if has_speech and buffer_duration > 0.5:
+                    return {
+                        "session_id": task.session_id,
+                        "sv_processing": True,
+                        "timestamp": task.timestamp,
+                    }
+                return None
+
+            # 取出 buffer 整段识别
+            segment = buf["pcm"]
+            buf["pcm"] = np.array([], dtype=np.float32)
+            buf["last_emit_time"] = now
+
+        if len(segment) < SR * SV_MIN_SEGMENT_DURATION:  # 小于最短时长的片段跳过
+            return None
+
+        # ── 帧级语音占比检测（比整体 RMS 更精准）──
+        # 把片段切成 30ms 的帧，统计有多少帧能量超过语音阈值
+        # 真正说话的片段，语音帧占比应 > 30%；噪声/幻觉段绝大多数帧是静音
+        frame_size = int(SR * 0.03)  # 30ms
+        n_frames = len(segment) // frame_size
+        if n_frames > 0:
+            frames = segment[:n_frames * frame_size].reshape(n_frames, frame_size)
+            frame_rms = np.sqrt(np.mean(frames ** 2, axis=1))
+            speech_frames = np.sum(frame_rms >= SV_SPEECH_THRESHOLD)
+            speech_ratio = speech_frames / n_frames
+        else:
+            speech_ratio = 0.0
+        segment_rms = float(np.sqrt(np.mean(segment ** 2))) if segment.size > 0 else 0.0
+
+        # 过滤条件：整体 RMS 太低 或 语音帧占比 < 30%（噪声脉冲不适合送识别）
+        if segment_rms < SV_MIN_SEGMENT_ENERGY or speech_ratio < 0.3:
+            logger.info(f"[SenseVoice] Skipping low-speech segment: session={task.session_id}, "
+                        f"duration={len(segment)/SR:.1f}s, rms={segment_rms:.4f}, "
+                        f"speech_ratio={speech_ratio:.2f} ({int(speech_ratio*n_frames)}/{n_frames} frames)")
+            return None
+
+        logger.info(f"[SenseVoice] Recognizing segment: session={task.session_id}, "
+                    f"duration={len(segment)/SR:.1f}s, rms={segment_rms:.4f}, "
+                    f"speech_ratio={speech_ratio:.2f}")
+
+        from funasr.utils.postprocess_utils import rich_transcription_postprocess
+        result = self.sensevoice_model.generate(
+            input=segment,
+            cache={},
+            language="zh",
+            use_itn=True,
+        )
+
+        if result and len(result) > 0:
+            raw_text = result[0].get("text", "")
+            text = rich_transcription_postprocess(raw_text)
+            # 去除 SenseVoice 情感/事件 emoji（😊😔😡😰🤢😮🎼👏😀😭🤧❓等）
+            text = re.sub(r'[\U0001f600-\U0001f64f\U0001f300-\U0001f5ff\u2764\ufe0f\u2763\ufe0f❓]', '', text).strip()
+            # 去除标点后检查实际文字长度，过滤"嗯"、"。"等无意义碎片
+            clean_text = re.sub(r'[，。？！、\s\u200b\U0001f000-\U0001ffff〈〈》]', '', text).strip()
+            logger.info(f"[SenseVoice] Recognized: '{text}' (clean: '{clean_text}', len={len(clean_text)})")
+
+            if len(clean_text) >= SV_MIN_TEXT_LENGTH:
+                # 过滤 SenseVoice 典型幻觉碎片：短文本且命中关键词
+                if len(clean_text) <= 5 and any(kw in clean_text for kw in SV_HALLUCINATION_KEYWORDS):
+                    logger.info(f"[SenseVoice] Filtered hallucination: '{clean_text}'")
+                    return None
+                return {
+                    "session_id": task.session_id,
+                    # SenseVoice 整段识别直接返回 final，不区分 partial
+                    "interim_text": "",
+                    "final_text": "",
+                    # 通过 special flag 让 aggregator 直接跳过累积逻辑
+                    "sv_final_text": text,
+                    "timestamp": task.timestamp,
+                    "confidence": 1.0,
+                    "is_final": True,
+                }
+        return None
     
     def _resample(self, audio: np.ndarray, src_rate: int, dst_rate: int) -> np.ndarray:
         if src_rate == dst_rate:
@@ -304,6 +464,28 @@ class ASRWorker:
     
     def finalize_session(self, session_id: str) -> Optional[dict]:
         try:
+            # 先处理 SenseVoice 残余 buffer
+            with self._sv_lock:
+                buf = self._sv_buffers.pop(session_id, None)
+            if buf is not None and self.sensevoice_model is not None:
+                segment = buf["pcm"]
+                if len(segment) >= 16000 * 0.3:
+                    logger.info(f"[SenseVoice] Finalizing segment: session={session_id}, duration={len(segment)/16000:.1f}s")
+                    from funasr.utils.postprocess_utils import rich_transcription_postprocess
+                    result = self.sensevoice_model.generate(
+                        input=segment, cache={}, language="zh", use_itn=True,
+                    )
+                    if result and len(result) > 0:
+                        text = rich_transcription_postprocess(result[0].get("text", ""))
+                        text = re.sub(r'[\U0001f600-\U0001f64f\U0001f300-\U0001f5ff\u2764\ufe0f\u2763\ufe0f❓]', '', text).strip()
+                        if text.strip():
+                            return {
+                                "session_id": session_id,
+                                "final_text": text,
+                                "timestamp": int(time.time() * 1000),
+                                "is_final": True,
+                            }
+
             if session_id not in self.session_states:
                 return None
             

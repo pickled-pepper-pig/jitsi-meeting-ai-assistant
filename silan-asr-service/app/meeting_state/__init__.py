@@ -83,6 +83,26 @@ def meeting_exists(room_id: str) -> bool:
         return False
 
 
+def get_asr_model(room_id: str) -> str:
+    """获取会议当前使用的 ASR 模型名"""
+    with _lock:
+        cached = _load_from_redis(room_id)
+        if cached:
+            return cached.get("asrModel") or "paraformer-zh-streaming"
+        meeting = _meetings.get(room_id)
+        if meeting:
+            return meeting.get("asrModel") or "paraformer-zh-streaming"
+        return "paraformer-zh-streaming"
+
+
+def set_asr_model(room_id: str, model: str) -> None:
+    """设置会议使用的 ASR 模型"""
+    with _lock:
+        meeting = get_or_create_meeting(room_id)
+        meeting["asrModel"] = model
+        _save_to_redis(room_id, meeting)
+
+
 def get_or_create_meeting(room_id: str) -> Dict[str, Any]:
     """获取或创建会议状态"""
     with _lock:
@@ -104,6 +124,7 @@ def get_or_create_meeting(room_id: str) -> Dict[str, Any]:
                 "asrSessions": [],
                 "firstModeratorId": None,  # 第一个以主持人身份加入的用户 ID
                 "firstModeratorName": None,  # 第一个主持人的昵称（用于前端展示）
+                "asrModel": "paraformer-zh-streaming",  # 会议选择的 ASR 模型
             }
         return _meetings[room_id]
 

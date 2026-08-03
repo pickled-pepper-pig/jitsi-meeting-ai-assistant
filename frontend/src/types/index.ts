@@ -36,7 +36,7 @@ export type ServerMessage =
   // 主持人产生的 final 转写：旁观者同步接收
   | { type: 'meeting_transcript'; text: string; participant_id?: string; participant_name?: string; timestamp: number; meeting_id?: string; session_id?: string }
   // 主持人产生的 partial 转写：旁观者实时显示
-  | { type: 'meeting_transcript_partial'; text: string; participant_id?: string; participant_name?: string; timestamp: number; meeting_id?: string; session_id?: string };
+  | { type: 'meeting_transcript_partial'; text: string; participant_id?: string; participant_name?: string; timestamp: number; meeting_id?: string; session_id?: string; is_processing?: boolean };
 
 /** 连接状态 */
 export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'reconnecting';

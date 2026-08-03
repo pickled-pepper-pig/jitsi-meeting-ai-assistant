@@ -40,7 +40,8 @@ class BotManager:
 
     def __init__(self):
         self._bots: Dict[str, MeetingBot] = {}     # meeting_id -> MeetingBot
-        self._lock = asyncio.Lock()
+        # Flask 后台线程没有 event loop，延迟到主线程首次使用时创建 asyncio.Lock
+        self._lock = None
         # BrowserController 复用单例：kill 时必须用同一个实例才能找到 browser 句柄
         # （之前每次 new 新实例导致 _browsers 字典永远为空 → kill 实际关不掉 browser）
         self._browser_controller = None
@@ -48,6 +49,12 @@ class BotManager:
         self._health_task: Optional[asyncio.Task] = None
         # 启动时标记：避免重复加载 Redis 里的 stale bot
         self._recovered = False
+
+    async def _ensure_lock(self):
+        """惰性创建 asyncio.Lock（在主线程的 event loop 内调用）"""
+        if self._lock is None:
+            self._lock = asyncio.Lock()
+        return self._lock
 
     def _get_browser_controller(self):
         """惰性初始化 BrowserController 单例"""
@@ -140,7 +147,8 @@ class BotManager:
             self._recovered = True
             self._start_health_check()
 
-        async with self._lock:
+        lock = await self._ensure_lock()
+        async with lock:
             existing = self._bots.get(meeting_id)
             if existing and existing.status in ("running", "spawning"):
                 logger.warning(f"[BotManager] 房间 {meeting_id} 已有运行中的 Bot，复用")
@@ -191,7 +199,8 @@ class BotManager:
         修复点：必须用 spawn 时的同一个 BrowserController 实例，
         否则 _browsers 字典在新实例里是空的，kill 调用等于 no-op。
         """
-        async with self._lock:
+        lock = await self._ensure_lock()
+        async with lock:
             bot = self._bots.get(meeting_id)
             if not bot:
                 return False
@@ -251,7 +260,8 @@ class BotManager:
             return
 
         stale_meetings: List[str] = []
-        async with self._lock:
+        lock = await self._ensure_lock()
+        async with lock:
             for meeting_id, bot in list(self._bots.items()):
                 if bot.status != "running":
                     continue

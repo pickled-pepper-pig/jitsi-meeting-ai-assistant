@@ -43,17 +43,27 @@ echo ""
 
 # 检查并更新配置
 if [ -f .env ]; then
-    OLD_IP=$(grep 'JVB_ADVERTISE_IPS=' .env | cut -d'=' -f2)
+    OLD_IP=$(grep '^LOCAL_IP=' .env | cut -d'=' -f2)
     
     if [ "$CURRENT_IP" != "$OLD_IP" ]; then
         echo "🔄 IP 地址已变化：$OLD_IP → $CURRENT_IP"
-        echo "📝 更新配置文件..."
+        echo "📝 更新 .env 中的 LOCAL_IP..."
         
-        sed -i '' "s|PUBLIC_URL=https://.*:8443|PUBLIC_URL=https://$CURRENT_IP:8443|" .env
-        sed -i '' "s|JVB_ADVERTISE_IPS=.*|JVB_ADVERTISE_IPS=$CURRENT_IP|" .env
+        sed -i '' "s|^LOCAL_IP=.*|LOCAL_IP=$CURRENT_IP|" .env
         
-        echo "📜 重新生成 Jitsi 证书..."
+        echo "📜 重新生成 Jitsi 证书（8443）..."
+        mkdir -p certs
         mkcert -cert-file certs/jitsi.crt -key-file certs/jitsi.key localhost 127.0.0.1 "$CURRENT_IP" ::1 > /dev/null 2>&1
+        
+        echo "📜 重新生成前端 Vite 证书（3000）..."
+        FRONTEND_DIR="$SCRIPT_DIR/../frontend"
+        if [ -d "$FRONTEND_DIR" ]; then
+            mkcert -cert-file "$FRONTEND_DIR/localhost+3.pem" -key-file "$FRONTEND_DIR/localhost+3-key.pem" localhost 127.0.0.1 "$CURRENT_IP" ::1 > /dev/null 2>&1
+        fi
+        
+        echo "🔄 重启 Jitsi 容器以加载新证书..."
+        docker compose restart web prosody jicofo jvb > /dev/null 2>&1
+        sleep 5
         
         echo "✅ 配置已更新"
         echo ""

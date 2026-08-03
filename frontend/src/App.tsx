@@ -24,9 +24,73 @@ export default function App() {
   const [roomName, setRoomName] = useState(getUrlParam('room'));
   const [displayName, setDisplayName] = useState(getUrlParam('name'));
   const [isModerator, setIsModerator] = useState(true);
+  const [asrModel, setAsrModel] = useState<'paraformer-zh-streaming' | 'SenseVoiceSmall'>('paraformer-zh-streaming');
+  const [asrPanelOpen, setAsrPanelOpen] = useState(false);
   const [joined, setJoined] = useState(false);
   const [aiEnabled, setAiEnabled] = useState(false);
   const [copied, setCopied] = useState(false);
+
+  // 可拖动分割线：控制 Jitsi iframe 与会议纪要 sidebar 的宽度分配
+  const SIDEBAR_DEFAULT = 460;
+  const SIDEBAR_MIN = 400;
+  const SIDEBAR_MAX = 600;
+  const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_DEFAULT);
+  const [isDragging, setIsDragging] = useState(false);
+  const draggingRef = useRef(false);
+
+  // 鼠标按下分割线 → 开始拖动
+  const handleDividerMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    draggingRef.current = true;
+    setIsDragging(true);
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+  }, []);
+
+  // 全局 mousemove / mouseup：拖动中实时调整宽度，松开时清理状态
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const onMove = (e: MouseEvent) => {
+      if (!draggingRef.current) return;
+      // sidebar 在右侧，宽度 = 视口宽度 - 鼠标 x 坐标
+      const w = window.innerWidth - e.clientX;
+      setSidebarWidth(Math.max(SIDEBAR_MIN, Math.min(SIDEBAR_MAX, w)));
+    };
+    const onUp = () => {
+      if (!draggingRef.current) return;
+      draggingRef.current = false;
+      setIsDragging(false);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    return () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+  }, []);
+
+  // 定时清理过期的 processing 状态：超过 10s 没收到后续消息的自动清除
+  // 防止停止录制/静音后"正在说话..."残留
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setRemotePartials(prev => {
+        const now = Date.now();
+        let changed = false;
+        const next = { ...prev };
+        for (const [pid, p] of Object.entries(next)) {
+          if (p.isProcessing && now - p.ts > 10000) {
+            delete next[pid];
+            changed = true;
+          }
+        }
+        return changed ? next : prev;
+      });
+    }, 3000);
+    return () => clearInterval(interval);
+  }, []);
+
   const [showModeratorOccupied, setShowModeratorOccupied] = useState(false);
   const [moderatorOccupiedMessage, setModeratorOccupiedMessage] = useState('');
   // 通用弹窗（替代 alert，与 moderator_occupied 弹窗保持一致的样式）
@@ -54,7 +118,7 @@ export default function App() {
   // 多 speaker 实时 partial：按 participant_id 聚合，支持用户选中某个 speaker 聚焦查看。
   // 之前用单条 remotePartial，两人同时说话时会互相覆盖，展示混乱。
   // key: participant_id, value: { text, name, id, ts }
-  const [remotePartials, setRemotePartials] = useState<Record<string, { text: string; name: string; id: string; ts: number }>>({});
+  const [remotePartials, setRemotePartials] = useState<Record<string, { text: string; name: string; id: string; ts: number; isProcessing?: boolean }>>({});
   // 用户选中聚焦查看的 participant_id；null 表示自动跟随最新说话的人
   const [focusedSpeakerId, setFocusedSpeakerId] = useState<string | null>(null);
   // 真实参会者数量（含自己，来自 Jitsi IFrame API 的 participantJoined/Left 事件）
@@ -200,10 +264,23 @@ export default function App() {
             participant_id?: string;
             participant_name?: string;
             timestamp?: number;
+            is_processing?: boolean;
           };
-          if (t.text) {
-            const speakerName = tagModerator(t.participant_name || 'AI 转写');
-            const pid = t.participant_id || speakerName;
+          const speakerName = tagModerator(t.participant_name || 'AI 转写');
+          const pid = t.participant_id || speakerName;
+          // is_processing（SenseVoice 正在处理）：text 为空，显示"正在处理..."
+          if (t.is_processing) {
+            setRemotePartials(prev => ({
+              ...prev,
+              [pid]: {
+                text: '',
+                name: speakerName,
+                id: pid,
+                ts: t.timestamp || Date.now(),
+                isProcessing: true,
+              },
+            }));
+          } else if (t.text) {
             setRemotePartials(prev => ({
               ...prev,
               [pid]: {
@@ -211,6 +288,7 @@ export default function App() {
                 name: speakerName,
                 id: pid,
                 ts: t.timestamp || Date.now(),
+                isProcessing: false,
               },
             }));
           }
@@ -227,11 +305,14 @@ export default function App() {
     onMessage: handleWsMessage,
   });
 
-  const fetchJoinToken = async (roomId: string, userId: string, userName: string, asModerator: boolean) => {
+  const fetchJoinToken = async (
+    roomId: string, userId: string, userName: string, asModerator: boolean,
+    asrModel: string = 'paraformer-zh-streaming',
+  ) => {
     const res = await fetch(`${API_CONFIG.baseUrl}/api/join`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ roomId, userId, userName, asModerator }),
+      body: JSON.stringify({ roomId, userId, userName, asModerator, asrModel }),
     });
     if (res.status === 409) {
       const data = await res.json().catch(() => ({}));
@@ -262,6 +343,7 @@ export default function App() {
       role: 'moderator' | 'participant';
       reconnect?: boolean;
       history_cleared?: boolean;
+      asrModel?: string;
     }>;
   };
 
@@ -295,11 +377,13 @@ export default function App() {
     userIdRef.current = userId;
 
     try {
-      const result = await fetchJoinToken(roomName.trim(), userId, displayName.trim(), isModerator);
+      const result = await fetchJoinToken(roomName.trim(), userId, displayName.trim(), isModerator, asrModel);
       tokenRef.current = result.token;
       // 真实角色由后端决定（避免前端伪造）
       setIsModerator(result.role === 'moderator');
       setAiEnabled(true);
+      // 同步后端确认的 ASR 模型
+      if (result.asrModel) setAsrModel(result.asrModel as 'paraformer-zh-streaming' | 'SenseVoiceSmall');
 
       // 主持人重连且上次异常退出（endedAt=false），有历史纪要：弹窗确认是否清空
       if (result.role === 'moderator' && result.reconnect && !result.history_cleared) {
@@ -576,6 +660,12 @@ export default function App() {
     try {
       setAudioState(null);
       setRemoteCaptureCount(0);
+      setRemotePartials({});
+
+      // 停止浏览器端所有远程参会者音频采集（关闭 WS + 断开音频处理）
+      if (participantAudioReceiverRef.current) {
+        void participantAudioReceiverRef.current.stopAll();
+      }
 
       // 调用后端 kill Meeting Agent Bot
       try {
@@ -680,17 +770,78 @@ export default function App() {
             </label>
           </div>
 
+          {isModerator && (
+            <div className="form-group asr-panel">
+              <button
+                type="button"
+                className="asr-panel-header"
+                onClick={() => setAsrPanelOpen(o => !o)}
+                aria-expanded={asrPanelOpen}
+              >
+                <span className="asr-panel-label">
+                  <svg className="asr-panel-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="9" y="2" width="6" height="13" rx="3" />
+                    <path d="M19 10v1a7 7 0 0 1-14 0v-1" />
+                    <line x1="12" y1="19" x2="12" y2="22" />
+                  </svg>
+                  ASR 语音识别模型
+                </span>
+                <span className="cer-tooltip" tabIndex={0}>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="12" cy="12" r="10" />
+                    <line x1="12" y1="16" x2="12" y2="12" />
+                    <line x1="12" y1="8" x2="12.01" y2="8" />
+                  </svg>
+                  <span className="cer-tooltip-text">CER（字错误率）：衡量语音识别准确度的指标，越低越好</span>
+                </span>
+                <span className="asr-panel-current">{asrModel === 'paraformer-zh-streaming' ? 'Paraformer 流式' : 'SenseVoice 高准度'}</span>
+                <svg className={`asr-panel-chevron ${asrPanelOpen ? 'asr-chevron-open' : ''}`} width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="6 9 12 15 18 9" />
+                </svg>
+              </button>
+              {asrPanelOpen && (
+                <div className="asr-model-selector">
+                  <label className={`asr-model-option ${asrModel === 'paraformer-zh-streaming' ? 'active' : ''}`}>
+                    <input
+                      type="radio"
+                      name="asrModel"
+                      value="paraformer-zh-streaming"
+                      checked={asrModel === 'paraformer-zh-streaming'}
+                      onChange={() => setAsrModel('paraformer-zh-streaming')}
+                    />
+                    <div className="asr-model-info">
+                      <span className="asr-model-name">Paraformer-zh-streaming</span>
+                      <span className="asr-model-desc">流式 chunk｜CER 5.1%｜适合快速对话</span>
+                    </div>
+                  </label>
+                  <label className={`asr-model-option ${asrModel === 'SenseVoiceSmall' ? 'active' : ''}`}>
+                    <input
+                      type="radio"
+                      name="asrModel"
+                      value="SenseVoiceSmall"
+                      checked={asrModel === 'SenseVoiceSmall'}
+                      onChange={() => setAsrModel('SenseVoiceSmall')}
+                    />
+                    <div className="asr-model-info">
+                      <span className="asr-model-name">SenseVoice-Small</span>
+                      <span className="asr-model-desc">段批处理｜CER 3.8%｜适合高准度纪要</span>
+                    </div>
+                  </label>
+                </div>
+              )}
+            </div>
+          )}
+
           <button className="join-btn" onClick={handleJoin}>
             {isModerator ? '创建会议' : '加入会议'}
           </button>
 
           <div className="tips">
-            <p>使用说明：</p>
+            <p>使用说明</p>
             <ul>
-              <li>填好房间名与昵称即可加入会议</li>
-              <li>点「开启 AI 语音识别」开始实时转写为文字</li>
-              <li>主持人可点「总结会议」一键生成纪要</li>
-              <li>网络中断会自动重连，不丢失已记录内容</li>
+              <li>输入房间名与昵称即可创建或加入会议</li>
+              <li>首次进入会议请勾选「以主持人身份加入」，其他参会者无需勾选</li>
+              <li>可在「ASR 语音识别模型」中切换识别引擎</li>
             </ul>
           </div>
         </div>
@@ -700,7 +851,7 @@ export default function App() {
 
   return (
     <div className="app-container">
-      <div className="meeting-area">
+      <div className={`meeting-area${isDragging ? ' dragging' : ''}`}>
         <JitsiMeeting
           domain={JITSI_DOMAIN}
           protocol={JITSI_PROTOCOL}
@@ -716,6 +867,7 @@ export default function App() {
           onParticipantsChange={setParticipantsCount}
         />
       </div>
+      <div className="sidebar-divider" onMouseDown={handleDividerMouseDown} />
       <Sidebar
         messages={messages}
         onSummarize={handleSummarize}
@@ -735,6 +887,7 @@ export default function App() {
         participantsCount={participantsCount}
         tagModerator={tagModerator}
         onLeave={handleLeave}
+        style={{ width: sidebarWidth, minWidth: sidebarWidth }}
       />
     </div>
   );

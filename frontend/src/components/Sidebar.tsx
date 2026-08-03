@@ -1,5 +1,6 @@
 // 侧边栏组件 - 集成消息列表、总结按钮、合规提示
 
+import type { CSSProperties } from 'react';
 import { ChatMessage, ConnectionStatus } from '../types';
 import { AudioCaptureState } from '../services/audioTypes';
 import { MessageList } from './MessageList';
@@ -34,7 +35,7 @@ interface SidebarProps {
   audioState?: AudioCaptureState | null;
   remoteCaptureCount?: number;
   // 多 speaker 实时 partial：按 participant_id 聚合，支持用户点击头像聚焦某个 speaker
-  remotePartials?: Record<string, { text: string; name: string; id: string; ts: number }>;
+  remotePartials?: Record<string, { text: string; name: string; id: string; ts: number; isProcessing?: boolean }>;
   // 用户选中聚焦查看的 participant_id；null 表示自动跟随最新说话的人
   focusedSpeakerId?: string | null;
   onFocusSpeaker?: (id: string | null) => void;
@@ -44,6 +45,8 @@ interface SidebarProps {
   tagModerator?: (name: string) => string;
   // 离开会议回调
   onLeave?: () => void;
+  // 动态宽度（由外部分割线控制）
+  style?: CSSProperties;
 }
 
 export function Sidebar({
@@ -65,6 +68,7 @@ export function Sidebar({
   participantsCount = 0,
   tagModerator = (s) => s,
   onLeave,
+  style,
 }: SidebarProps) {
   const statusText: Record<ConnectionStatus, string> = {
     connected: '已连接',
@@ -81,7 +85,7 @@ export function Sidebar({
   };
 
   return (
-    <div className="sidebar">
+    <div className="sidebar" style={style}>
       <div className="sidebar-header">
         <div className="sidebar-title">
           <h3>会议纪要</h3>
@@ -231,10 +235,14 @@ export function Sidebar({
                     <span className="partial-speaker" style={{ color: getSpeakerColor(focused.name) }}>
                       {focused.name}
                     </span>
-                    <span className="partial-label">正在说...</span>
+                    <span className="partial-label">
+                      {focused.isProcessing ? '正在说话...' : '正在说...'}
+                    </span>
                   </div>
                   <div className="partial-text">
-                    {focused.text}
+                    {focused.isProcessing
+                      ? <span className="partial-processing-dots"><span></span><span></span><span></span></span>
+                      : focused.text}
                   </div>
                 </>
               )}

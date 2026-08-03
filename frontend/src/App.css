@@ -88,6 +88,156 @@ body {
   opacity: 0.9;
 }
 
+/* ASR 模型选择器 - 可折叠面板 */
+.asr-panel {
+  margin-bottom: 18px;
+}
+
+.asr-panel-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 12px 14px;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  background: #f9fafb;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  font-size: 13px;
+  color: #374151;
+}
+
+.asr-panel-header:hover {
+  border-color: #9ca3af;
+  background: #f3f4f6;
+}
+
+.asr-panel-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+}
+
+.asr-panel-icon {
+  color: #667eea;
+  flex-shrink: 0;
+}
+
+/* CER 说明 tooltip */
+.cer-tooltip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  color: #9ca3af;
+  cursor: pointer;
+}
+
+.cer-tooltip:hover {
+  color: #6b7280;
+}
+
+.cer-tooltip-text {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: #1f2937;
+  color: #f3f4f6;
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.4;
+  padding: 6px 10px;
+  border-radius: 6px;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease;
+  z-index: 100;
+}
+
+.cer-tooltip:hover .cer-tooltip-text,
+.cer-tooltip:focus .cer-tooltip-text {
+  opacity: 1;
+}
+
+.asr-panel-current {
+  margin-left: auto;
+  font-size: 12px;
+  font-weight: 500;
+  color: #6b7280;
+  background: #fff;
+  padding: 2px 8px;
+  border-radius: 6px;
+  border: 1px solid #e5e7eb;
+}
+
+.asr-panel-chevron {
+  color: #9ca3af;
+  transition: transform 0.2s ease;
+  flex-shrink: 0;
+}
+
+.asr-chevron-open {
+  transform: rotate(180deg);
+}
+
+.asr-model-selector {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+/* 提升特异性：.form-group label 的 display:block 会覆盖，需要 .form-group 前缀 */
+.form-group .asr-model-option,
+.asr-model-selector .asr-model-option {
+  display: flex !important;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.form-group .asr-model-option:hover,
+.asr-model-selector .asr-model-option:hover {
+  border-color: #9ca3af;
+}
+
+.form-group .asr-model-option.active,
+.asr-model-selector .asr-model-option.active {
+  border-color: #3b82f6;
+  background: rgba(59, 130, 246, 0.05);
+}
+
+.form-group .asr-model-option input[type="radio"],
+.asr-model-selector .asr-model-option input[type="radio"] {
+  flex-shrink: 0;
+  accent-color: #3b82f6;
+}
+
+.asr-model-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.asr-model-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: #1f2937;
+}
+
+.asr-model-desc {
+  font-size: 11.5px;
+  color: #6b7280;
+  line-height: 1.4;
+}
+
 .tips {
   margin-top: 24px;
   padding: 16px;
@@ -123,6 +273,28 @@ body {
   flex: 1;
   background: #000;
   position: relative;
+  min-width: 320px;
+}
+
+/* 拖动分割线时禁用 iframe 指针事件，防止鼠标松开被吞 */
+.meeting-area.dragging {
+  pointer-events: none;
+}
+
+/* 可拖动分割线：Jitsi iframe ↔ 会议纪要 sidebar */
+.sidebar-divider {
+  width: 6px;
+  flex-shrink: 0;
+  cursor: col-resize;
+  background: #e5e7eb;
+  position: relative;
+  transition: background 0.15s ease;
+  z-index: 10;
+}
+
+.sidebar-divider:hover,
+.sidebar-divider:active {
+  background: #2563eb;
 }
 
 .jitsi-container {
@@ -179,12 +351,10 @@ body {
 
 /* ===== 侧边栏 ===== */
 .sidebar {
-  width: 460px;
-  min-width: 460px;
+  flex-shrink: 0;
   display: flex;
   flex-direction: column;
   background: #fafbfc;
-  border-left: 1px solid #e5e7eb;
 }
 
 .sidebar-header {
@@ -723,6 +893,35 @@ body {
   color: #0c4a6e;
   line-height: 1.5;
   font-style: italic;
+}
+
+/* SenseVoice 正在说话：三点跳动动画 */
+.partial-processing-dots {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+  height: 18px;
+}
+
+.partial-processing-dots span {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #0ea5e9;
+  animation: dot-bounce 1.2s ease-in-out infinite;
+}
+
+.partial-processing-dots span:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.partial-processing-dots span:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+@keyframes dot-bounce {
+  0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
+  30% { transform: translateY(-6px); opacity: 1; }
 }
 
 /* ===== 底部按钮 ===== */

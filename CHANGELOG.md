@@ -2,6 +2,24 @@
 
 本项目的所有重要变更都会记录在此文件中。
 
+## [1.10.0] - 2026-08-03
+
+### feat（新功能）
+- Jitsi iframe 与会议纪要之间可拖动分割线，拖动时禁用 iframe 指针事件防止鼠标松开被吞
+- SenseVoice 模式实时说话指示器：头像 + 说话人名 + 三点跳动动画，修复 `is_processing` 字段在 WebSocket 转换时丢失
+- SenseVoice 防幻觉机制：帧级语音占比检测 + 片段 RMS 校验 + 幻觉关键词黑名单 + emoji 过滤
+- 停止录制时清除 `remotePartials` + 停止 `ParticipantAudioReceiver` 采集，processing 状态 10s 超时自动清除
+- ASR 模型选择器增加 CER 说明 tooltip
+- `start.sh` 支持 IP 变更时自动重新生成 Jitsi + 前端 SSL 证书并重启容器
+
+### fix（修复）
+- SenseVoice 静音能量阈值从 0.015 提高到 0.025，减少噪声刷新静音计时器
+- `useWebSocket` 转换 `transcript_partial` 时补传 `is_processing` 字段
+
+### docs（文档）
+- 重写 DOCS.md：前端 IFrame 集成、双 WS 通道、多参会者音频采集、多用户隔离、双模型 ASR、Meeting Agent Bot、AudioProcessor 预处理
+- README 使用说明更新 + Jitsi 启动改为 `./start.sh`
+
 ## [1.9.0] - 2026-07-31
 
 ### feat（新功能）

@@ -25,6 +25,8 @@ from app.meeting_state import (
     check_name_conflict,
     meeting_exists,
     end_meeting,
+    get_asr_model,
+    set_asr_model,
 )
 from app.audit_log import get_logs as get_audit_logs
 
@@ -139,6 +141,7 @@ def join_meeting():
     user_id = data.get("userId")
     user_name = data.get("userName")
     as_moderator = bool(data.get("asModerator", False))
+    asr_model = data.get("asrModel") or "paraformer-zh-streaming"
 
     if not room_id or not user_id:
         return jsonify({"error": "roomId 和 userId 必填"}), 400
@@ -164,6 +167,8 @@ def join_meeting():
         token = generate_moderator_token(room_id, user_id, user_name)
         # 主持人也写入 participants 表，用于后续 join 的名字查重
         add_participant(room_id, {"id": user_id, "name": user_name, "role": "moderator"})
+        # 主持人设置会议的 ASR 模型
+        set_asr_model(room_id, asr_model)
         return jsonify({
             "token": token,
             "role": "moderator",
@@ -171,6 +176,7 @@ def join_meeting():
             "userId": user_id,
             "reconnect": claim.get("reconnect", False),
             "history_cleared": claim.get("history_cleared", False),
+            "asrModel": asr_model,
         })
     else:
         # 非主持人加入：必须先有主持人创建会议
@@ -182,11 +188,14 @@ def join_meeting():
         token = generate_participant_token(room_id, user_id, user_name)
         # 在 meeting_state 中顺便把参会者落表（用于后续 join 的名字查重）
         add_participant(room_id, {"id": user_id, "name": user_name, "role": "participant"})
+        # 非主持人读取当前会议的 ASR 模型
+        current_asr_model = get_asr_model(room_id)
         return jsonify({
             "token": token,
             "role": "participant",
             "roomId": room_id,
             "userId": user_id,
+            "asrModel": current_asr_model,
         })
 
 

@@ -144,6 +144,56 @@ class TranscriptAggregator:
             }
         """
         session_id = result.get("session_id", "")
+
+        # SenseVoice 处理中信号：有人在说话，音频正在积累但还没触发识别
+        # 转成 transcript_partial 发给前端，前端显示"正在处理..."
+        if result.get("sv_processing"):
+            with self._lock:
+                buf = self._buffers.get(session_id)
+                if buf and self._callback:
+                    self._callback({
+                        "type": "transcript_partial",
+                        "session_id": buf.session_id,
+                        "meeting_id": buf.meeting_id,
+                        "participant_id": buf.participant_id,
+                        "participant_name": buf.participant_name,
+                        "text": "",  # 空文本 = 处理中，前端用占位文字
+                        "is_processing": True,
+                        "timestamp": int(time.time() * 1000),
+                    })
+            return
+
+        # SenseVoice 段批处理模式：直接走 final 通路
+        sv_text = result.get("sv_final_text")
+        if sv_text:
+            with self._lock:
+                buf = self._buffers.get(session_id)
+                if not buf:
+                    logger.warning(f"[Aggregator] No buffer for session: {session_id}")
+                    return
+                # SenseVoice 自带标点，不需要 _add_punctuation
+                buf.is_finalized = True
+                if self._callback:
+                    self._callback({
+                        "type": "transcript_final",
+                        "session_id": buf.session_id,
+                        "meeting_id": buf.meeting_id,
+                        "participant_id": buf.participant_id,
+                        "participant_name": buf.participant_name,
+                        "text": sv_text,
+                        "start_time": int(buf.start_time * 1000),
+                        "end_time": int(time.time() * 1000),
+                        "timestamp": int(time.time() * 1000),
+                    })
+                logger.info(f"[Aggregator] SenseVoice final: '{sv_text}' ({buf.participant_name})")
+                # 重置 buffer
+                buf.current_text = ""
+                buf.emitted_text = ""
+                buf.start_time = time.time()
+                buf.last_update_time = time.time()
+                buf.is_finalized = False
+            return
+
         text = result.get("interim_text", "").strip()
         is_final = result.get("is_final", False)
 

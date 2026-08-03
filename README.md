@@ -97,10 +97,15 @@ silan-jitsi/
 ### 1. 启动 Jitsi（Docker）
 
 ```bash
-cd jitsi
-CONFIG=./jitsi-meet-cfg docker compose up -d
+cd jitsi/jitsi
+./start.sh
 # Jitsi 运行在 https://localhost:8443
 ```
+
+> 使用 `./start.sh` 而非 `docker compose up -d`。脚本会自动检测局域网 IP，
+> 当 IP 变化时自动更新 `.env`、重新生成 SSL 证书并重启容器，
+> 避免 WSS 连接因证书 IP 不匹配导致"你已断开连接"。
+> 停止服务：`./stop.sh`
 
 ### 2. 启动后端 ASR 服务（Python）
 
@@ -133,7 +138,7 @@ python -m test_client.wav_stream_client --wav path/to/audio.wav
 
 ```bash
 # 1. 启动 Jitsi
-cd /Users/apple/Projects/silan/jitsi/jitsi && docker compose up -d
+cd /Users/apple/Projects/silan/jitsi/jitsi/jitsi && ./start.sh
 
 # 2. 启动后端（新终端）
 cd /Users/apple/Projects/silan/jitsi/silan-asr-service

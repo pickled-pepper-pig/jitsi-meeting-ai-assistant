@@ -126,6 +126,7 @@ export function useWebSocket(options: UseWebSocketOptions) {
           timestamp: data.timestamp,
           meeting_id: data.meeting_id,
           session_id: data.session_id,
+          is_processing: data.is_processing,
         };
         break;
 
