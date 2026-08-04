@@ -170,6 +170,11 @@ class BotManager:
             )
             self._bots[meeting_id] = bot
             self._persist_bot(bot)
+            try:
+                from app.meeting_state import sqlite_store
+                sqlite_store.save_bot_instance(meeting_id, bot_id, "spawning")
+            except Exception:
+                pass
 
             # 启动 Chromium（复用单例 controller！这是 kill bug 的关键修复）
             controller = self._get_browser_controller()
@@ -184,11 +189,21 @@ class BotManager:
                 bot.status = "running"
                 self._persist_bot(bot)
                 logger.info(f"[BotManager] Bot {bot_id} 启动成功，房间 {meeting_id}")
+                try:
+                    from app.meeting_state import sqlite_store
+                    sqlite_store.update_bot_status(bot_id, "running")
+                except Exception:
+                    pass
             except Exception as e:
                 bot.status = "failed"
                 bot.error = str(e)
                 self._persist_bot(bot)
                 logger.exception(f"[BotManager] Bot {bot_id} 启动失败: {e}")
+                try:
+                    from app.meeting_state import sqlite_store
+                    sqlite_store.update_bot_status(bot_id, "failed")
+                except Exception:
+                    pass
                 raise
 
             return bot
@@ -223,6 +238,11 @@ class BotManager:
             self._bots.pop(meeting_id, None)
             self._delete_bot_from_redis(meeting_id)
             logger.info(f"[BotManager] Bot {bot.bot_id} 已停止")
+            try:
+                from app.meeting_state import sqlite_store
+                sqlite_store.update_bot_status(bot.bot_id, "killed", stopped_at=int(time.time() * 1000))
+            except Exception:
+                pass
             return True
 
     # ------------------------------------------------------------------

@@ -350,7 +350,9 @@ def clear_history_api(room_id: str):
     meeting["messages"] = []
     meeting["seq"] = 0
     from app.meeting_state import _save_to_redis
+    from app.meeting_state import sqlite_store
     _save_to_redis(room_id, meeting)
+    sqlite_store.clear_room_data(room_id)
     return jsonify({"ok": True, "roomId": room_id})
 
 

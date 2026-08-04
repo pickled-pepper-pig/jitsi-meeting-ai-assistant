@@ -1,10 +1,12 @@
-# 会议状态管理 - 内存 + Redis 降级
+# 会议状态管理 - 内存 + Redis 降级 + SQLite 持久化
 
 import json
 import logging
 import time
 import threading
 from typing import Dict, List, Optional, Any
+
+from app.meeting_state import sqlite_store
 
 logger = logging.getLogger(__name__)
 
@@ -142,6 +144,7 @@ def add_message(room_id: str, message: Dict[str, Any]) -> Dict[str, Any]:
         }
         meeting["messages"].append(full_message)
         _save_to_redis(room_id, meeting)
+        sqlite_store.save_message(full_message)
         return full_message
 
 
@@ -168,6 +171,7 @@ def clear_messages(room_id: str) -> None:
         meeting["messages"] = []
         meeting["seq"] = 0
         _save_to_redis(room_id, meeting)
+        sqlite_store.clear_room_data(room_id)
         logger.info(f"[meeting_state] 已清空房间 {room_id} 的历史消息")
 
 
@@ -181,6 +185,7 @@ def end_meeting(room_id: str) -> None:
         meeting["firstModeratorName"] = None
         meeting["participants"] = []
         _save_to_redis(room_id, meeting)
+        sqlite_store.upsert_meeting(room_id, status="finished", ended_at=int(time.time() * 1000))
 
 
 def set_ai_bot(room_id: str, status: str, started_by: str = None) -> Dict[str, Any]:
@@ -247,6 +252,13 @@ def add_participant(room_id: str, participant: Dict[str, Any]) -> None:
         else:
             existing.update(participant)
         _save_to_redis(room_id, meeting)
+    sqlite_store.add_participant(
+        room_id=room_id,
+        user_id=participant.get("id"),
+        display_name=participant.get("name"),
+        role=participant.get("role", "participant"),
+        joined_at=participant.get("joinedAt"),
+    )
 
 
 def check_name_conflict(room_id: str, user_id: str, user_name: str) -> Optional[str]:
@@ -311,6 +323,12 @@ def claim_moderator(room_id: str, user_id: str, user_name: Optional[str] = None)
             meeting["messages"] = []
             meeting["seq"] = 0
             _save_to_redis(room_id, meeting)
+            sqlite_store.clear_room_data(room_id)
+            sqlite_store.upsert_meeting(
+                room_id, status="running",
+                first_moderator_id=user_id, first_moderator_name=user_name,
+                started_at=int(time.time() * 1000),
+            )
             logger.info(f"[meeting_state] 主持人 {user_name or user_id} 创建会议 {room_id}，已清空历史纪要")
             return {
                 "ok": True,
@@ -327,6 +345,7 @@ def claim_moderator(room_id: str, user_id: str, user_name: Optional[str] = None)
                 meeting["endedAt"] = False
                 meeting["participants"] = []
                 _save_to_redis(room_id, meeting)
+                sqlite_store.clear_room_data(room_id)
                 logger.info(f"[meeting_state] 主持人 {user_name or user_id} 重连会议 {room_id}（上次已结束），清空历史纪要")
             return {
                 "ok": True,
@@ -356,6 +375,7 @@ def remove_participant(room_id: str, participant_id: str) -> None:
         if participant:
             participant["leftAt"] = int(time.time() * 1000)
         _save_to_redis(room_id, meeting)
+    sqlite_store.update_participant_left(room_id, participant_id)
 
 
 def add_asr_session(room_id: str, participant_id: str, session_id: str) -> None:
@@ -368,11 +388,16 @@ def add_asr_session(room_id: str, participant_id: str, session_id: str) -> None:
         else:
             existing["sessionId"] = session_id
         _save_to_redis(room_id, meeting)
+    model = meeting.get("asrModel", "paraformer-zh-streaming")
+    sqlite_store.save_asr_session(room_id, session_id, speaker_id=participant_id, model=model)
 
 
 def remove_asr_session(room_id: str, participant_id: str) -> None:
     """移除 ASR Session"""
     with _lock:
         meeting = get_or_create_meeting(room_id)
+        session = next((s for s in meeting["asrSessions"] if s["participantId"] == participant_id), None)
         meeting["asrSessions"] = [s for s in meeting["asrSessions"] if s["participantId"] != participant_id]
         _save_to_redis(room_id, meeting)
+    if session:
+        sqlite_store.end_asr_session(session.get("sessionId"))

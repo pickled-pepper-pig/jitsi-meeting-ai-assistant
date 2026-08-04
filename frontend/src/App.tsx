@@ -811,7 +811,7 @@ export default function App() {
                     />
                     <div className="asr-model-info">
                       <span className="asr-model-name">Paraformer-zh-streaming</span>
-                      <span className="asr-model-desc">流式 chunk｜CER 5.1%｜适合快速对话</span>
+                      <span className="asr-model-desc">流式 chunk｜CER 5.1%｜支持热词注入</span>
                     </div>
                   </label>
                   <label className={`asr-model-option ${asrModel === 'SenseVoiceSmall' ? 'active' : ''}`}>

@@ -71,6 +71,11 @@ class WavWriterPool:
         if key not in self._writers:
             path = self.base_dir / meeting_id / f"{speaker_id}.wav"
             self._writers[key] = WavWriter(str(path), sample_rate=sample_rate)
+            try:
+                from app.meeting_state import sqlite_store
+                sqlite_store.save_recording(meeting_id, speaker_id, str(path), sample_rate)
+            except Exception:
+                pass
         self._writers[key].write(pcm)
 
     def close_all(self):
@@ -83,3 +88,8 @@ class WavWriterPool:
         w = self._writers.pop(key, None)
         if w:
             w.close()
+            try:
+                from app.meeting_state import sqlite_store
+                sqlite_store.update_recording_status(str(w.path), "completed")
+            except Exception:
+                pass

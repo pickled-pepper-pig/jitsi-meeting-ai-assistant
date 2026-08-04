@@ -34,6 +34,8 @@ from app.meeting_state import (
     set_ai_bot,
     get_ai_bot,
     get_asr_model,
+    add_asr_session,
+    remove_asr_session,
 )
 from app.audit_log import audit_log
 from app.llm_service import generate_summary
@@ -205,6 +207,11 @@ class WebSocketGatewayServer:
                     sample_rate=sample_rate,
                 )
                 logger.info(f"[Ingest] created session {session_id} (source={source})")
+                # 同步写入 SQLite asr_sessions 表
+                try:
+                    add_asr_session(meeting_id, participant_id, session_id)
+                except Exception:
+                    pass
         except Exception as e:
             logger.error(f"[Ingest] create_session error: {e}")
 
@@ -255,6 +262,10 @@ class WebSocketGatewayServer:
             self.session_manager.close_session(session_id)
         except Exception as e:
             logger.error(f"[Ingest] close_session error: {e}")
+        try:
+            remove_asr_session(meeting_id, participant_id)
+        except Exception:
+            pass
         logger.info(f"[Ingest] finalized session {session_id}")
 
     # -----------------------------------------------------------------------
