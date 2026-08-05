@@ -176,15 +176,18 @@ def clear_messages(room_id: str) -> None:
 
 
 def end_meeting(room_id: str) -> None:
-    """结束会议：释放主持人占位，清空参会者列表。
-    这样同一主持人重新进入时会被视为「创建新会议」，自动清空上一轮纪要。"""
+    """结束会议：释放主持人占位，清空参会者列表和历史纪要。
+    这样同一房间重新进入时不会看到上一轮的会议总结/聊天/转写。"""
     with _lock:
         meeting = get_or_create_meeting(room_id)
         meeting["endedAt"] = True
         meeting["firstModeratorId"] = None
         meeting["firstModeratorName"] = None
         meeting["participants"] = []
+        meeting["messages"] = []
+        meeting["seq"] = 0
         _save_to_redis(room_id, meeting)
+        sqlite_store.clear_room_data(room_id)
         sqlite_store.upsert_meeting(room_id, status="finished", ended_at=int(time.time() * 1000))
 
 
