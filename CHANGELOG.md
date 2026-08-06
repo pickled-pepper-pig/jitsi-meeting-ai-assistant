@@ -2,6 +2,11 @@
 
 本项目的所有重要变更都会记录在此文件中。
 
+## [1.11.1] - 2026-08-06
+
+### fix（修复）
+- `silan-asr-service/requirements.txt` 补全缺失依赖：`websockets`、`pyjwt`、`redis`、`playwright`、`python-socketio`、`python-engineio`、`simple-websocket`、`modelscope`、`librosa`；修正 `funasr` / `flask` / `flask-cors` / `transformers` 版本号与实际运行环境一致
+
 ## [1.11.0] - 2026-08-06
 
 ### feat（新功能）
