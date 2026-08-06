@@ -99,7 +99,6 @@ services:
             - JIBRI_RECORDER_PASSWORD
             - JIBRI_XMPP_USER
             - JIBRI_XMPP_PASSWORD
-            - JIGASI_XMPP_USER
             - JIGASI_XMPP_PASSWORD
             - JWT_APP_ID
             - JWT_APP_SECRET
@@ -110,7 +109,6 @@ services:
             - JWT_AUTH_TYPE
             - JWT_TOKEN_AUTH_MODULE
             - LOG_LEVEL
-            - AUTH_TYPE
             - PROSODY_RESERVATION_ENABLED
             - PROSODY_RESERVATION_REST_BASE_URL
             - PUBLIC_URL

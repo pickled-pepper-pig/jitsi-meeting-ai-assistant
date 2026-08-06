@@ -2,6 +2,14 @@
 
 本项目的所有重要变更都会记录在此文件中。
 
+## [1.10.2] - 2026-08-06
+
+### fix（修复）
+- `jitsi/docker-compose.yml` prosody 环境变量去重，修复 `docker compose up` 校验失败
+
+### chore（维护）
+- `.gitignore` 忽略本机 Git 远程切换指南 `GIT_REMOTE_GUIDE.md`
+
 ## [1.10.1] - 2026-08-05
 
 ### fix（修复）

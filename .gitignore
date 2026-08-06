@@ -75,3 +75,6 @@ data/
 *.db
 *.db-wal
 *.db-shm
+
+# === 本机 Git 切换指南（不上传）===
+GIT_REMOTE_GUIDE.md
