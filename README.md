@@ -98,13 +98,18 @@ silan-jitsi/
 
 ```bash
 cd jitsi/jitsi
-./start.sh
+./start.sh          # macOS
+./start-linux.sh    # Linux 服务器
 # Jitsi 运行在 https://localhost:8443
 ```
 
-> 使用 `./start.sh` 而非 `docker compose up -d`。脚本会自动检测局域网 IP，
+> 使用启动脚本而非 `docker compose up -d`。脚本会自动检测局域网 IP，
 > 当 IP 变化时自动更新 `.env`、重新生成 SSL 证书并重启容器，
 > 避免 WSS 连接因证书 IP 不匹配导致"你已断开连接"。
+>
+> - **macOS** 用 `./start.sh`（通过 `ipconfig getifaddr` 获取 IP）
+> - **Linux** 用 `./start-linux.sh`（通过 `ip route` / `hostname -I` 获取 IP，`sed -i` 语法兼容 GNU）
+>
 > 停止服务：`./stop.sh`
 
 ### 2. 启动后端 ASR 服务（Python）
