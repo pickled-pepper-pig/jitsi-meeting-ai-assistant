@@ -2,6 +2,11 @@
 
 本项目的所有重要变更都会记录在此文件中。
 
+## [1.11.2] - 2026-08-06
+
+### fix（修复）
+- Meeting Agent Bot `headless` 模式改为可配置（`BOT_HEADLESS` 环境变量），服务器无 X server 时启用 headless 启动，规避 `Missing X server or $DISPLAY` 错误
+
 ## [1.11.1] - 2026-08-06
 
 ### fix（修复）

@@ -81,11 +81,13 @@ class BrowserController:
             )
             page_url = file_url + params
 
-            # 临时：用 headless=False 验证 Bot 能拿到真实音频
-            # （旧版 headless=True 在 Mac 上会让 WebRTC 远端 audio track 不产 PCM 帧 → 全 0 静音）
-            # 验证通过后再想办法切 headless + 虚拟音频设备
+            # headless 通过环境变量控制：
+            #   - 本机 macOS（有显示器）：headless=False，浏览器真实启动，能拿到 WebRTC 远端音频
+            #   - Linux 服务器（无 X server）：headless=True，必须设置
+            # 注意：旧版 headless=True 在 Mac 上会让 WebRTC 远端 audio track 不产 PCM 帧 → 全 0 静音
+            headless_mode = os.getenv("BOT_HEADLESS", "false").lower() == "true"
             browser = await self._playwright.chromium.launch(
-                headless=False,
+                headless=headless_mode,
                 args=[
                     "--use-fake-ui-for-media-stream",
                     "--use-fake-device-for-media-stream",
