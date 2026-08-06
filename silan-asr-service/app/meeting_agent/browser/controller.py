@@ -86,17 +86,29 @@ class BrowserController:
             #   - Linux 服务器（无 X server）：headless=True，必须设置
             # 注意：旧版 headless=True 在 Mac 上会让 WebRTC 远端 audio track 不产 PCM 帧 → 全 0 静音
             headless_mode = os.getenv("BOT_HEADLESS", "false").lower() == "true"
-            browser = await self._playwright.chromium.launch(
-                headless=headless_mode,
-                args=[
+            # headless 模式专属参数：去掉 fake-ui（需要窗口系统），加 --headless=new
+            # 否则在无 X server 的服务器上 chrome 会按 headed 启动 → Missing X server
+            launch_args = [
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+                "--autoplay-policy=no-user-gesture-required",
+                # 忽略自签名证书（Jitsi HTTPS + 本地 WSS）
+                "--ignore-certificate-errors",
+            ]
+            if headless_mode:
+                launch_args += [
+                    "--headless=new",
+                    "--disable-gpu",
+                    "--no-first-run",
+                ]
+            else:
+                launch_args += [
                     "--use-fake-ui-for-media-stream",
                     "--use-fake-device-for-media-stream",
-                    "--no-sandbox",
-                    "--disable-dev-shm-usage",
-                    "--autoplay-policy=no-user-gesture-required",
-                    # 忽略自签名证书（Jitsi HTTPS + 本地 WSS）
-                    "--ignore-certificate-errors",
-                ],
+                ]
+            browser = await self._playwright.chromium.launch(
+                headless=headless_mode,
+                args=launch_args,
             )
             context = await browser.new_context(
                 permissions=["microphone", "camera"],
