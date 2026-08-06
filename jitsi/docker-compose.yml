@@ -99,7 +99,6 @@ services:
             - JIBRI_RECORDER_PASSWORD
             - JIBRI_XMPP_USER
             - JIBRI_XMPP_PASSWORD
-            - JIGASI_XMPP_PASSWORD
             - JWT_APP_ID
             - JWT_APP_SECRET
             - JWT_ACCEPTED_ISSUERS
