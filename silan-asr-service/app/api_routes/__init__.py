@@ -426,7 +426,7 @@ def audit_logs_api():
 def bot_spawn(room_id: str):
     """拉起 Recorder Bot 加入会议
 
-    Body: { "token": "...", "roomUrl": "https://192.0.36.227:8447" }
+    Body: { "token": "...", "roomUrl": "https://192.0.36.227:19447" }
     需要 moderator token。
     """
     data = request.get_json(silent=True) or {}

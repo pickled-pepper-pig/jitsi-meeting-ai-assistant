@@ -1,10 +1,10 @@
 // 环境配置
 // 开发阶段通过 Vite 代理转发：
-//   HTTP API (/api, /health) → Flask (127.0.0.1:8089)
-//   WebSocket (/ws) → WebSocket 服务 (127.0.0.1:8087)
+//   HTTP API (/api, /health) → Flask (127.0.0.1:19089)
+//   WebSocket (/ws) → WebSocket 服务 (127.0.0.1:19087)
 
-const JITSI_PORT = '8447';
-const BACKEND_PORT = '8087';
+const JITSI_PORT = '19447';
+const BACKEND_PORT = '19087';
 
 function getJitsiHost(): string {
   if (typeof window === 'undefined') return 'localhost';
@@ -32,7 +32,7 @@ export function getJitsiWebsocketUrl(): string {
 export const CURRENT_JITSI = 'local' as 'public' | 'local';
 
 function getBackendBaseUrl(): string {
-  if (typeof window === 'undefined') return 'http://localhost:8089';
+  if (typeof window === 'undefined') return 'http://localhost:19089';
   return ''; // Vite 代理
 }
 

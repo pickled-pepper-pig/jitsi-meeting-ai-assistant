@@ -9,23 +9,23 @@ const keyPath = path.join(__dirname, 'localhost+3-key.pem')
 const certPath = path.join(__dirname, 'localhost+3.pem')
 const useSsl = fs.existsSync(keyPath) && fs.existsSync(certPath)
 
-// Flask HTTP API (后台线程，端口 8089，避免与 Jitsi JVB 8088 冲突)
-const FLASK_TARGET = 'http://127.0.0.1:8089'
-// WebSocket 服务 (主线程，端口 8087)
-const WS_TARGET = 'http://127.0.0.1:8087'
+// Flask HTTP API (后台线程，端口 19089，避免与 Jitsi JVB 19088 冲突)
+const FLASK_TARGET = 'http://127.0.0.1:19089'
+// WebSocket 服务 (主线程，端口 19087)
+const WS_TARGET = 'http://127.0.0.1:19087'
 
 export default defineConfig({
   plugins: [react()],
   server: {
     host: true,
-    port: 3007,
+    port: 19307,
     strictPort: false,
     https: useSsl ? {
       key: fs.readFileSync(keyPath),
       cert: fs.readFileSync(certPath),
     } : undefined,
     proxy: {
-      // HTTP API → Flask (8089)
+      // HTTP API → Flask (19089)
       '/api': {
         target: FLASK_TARGET,
         changeOrigin: true,
@@ -36,7 +36,7 @@ export default defineConfig({
         changeOrigin: true,
         secure: false,
       },
-      // WebSocket 升级 → WebSocket 服务 (8087)
+      // WebSocket 升级 → WebSocket 服务 (19087)
       // 原生 WebSocket 连接会走这个代理
       '/ws': {
         target: WS_TARGET,

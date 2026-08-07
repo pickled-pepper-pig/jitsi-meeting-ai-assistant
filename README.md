@@ -85,16 +85,16 @@ silan-jitsi/
 
 | 服务 | 端口 | 说明 |
 |------|------|------|
-| 前端 (Vite) | **3007** | https://localhost:3007 |
-| ASR WebSocket | **8087** | ws://localhost:8087 |
-| 后端 HTTP API | **8089** | http://localhost:8089（Flask，自动 = WS + 2） |
-| Jitsi Meet | **8447** | https://localhost:8447 |
+| 前端 (Vite) | **19307** | https://localhost:19307 |
+| ASR WebSocket | **19087** | ws://localhost:19087 |
+| 后端 HTTP API | **19089** | http://localhost:19089（Flask，自动 = WS + 2） |
+| Jitsi Meet | **19447** | https://localhost:19447 |
 
 ---
 
 ## 快速开始
 
-> 默认端口：前端 3007 / ASR WS 8087 / ASR HTTP 8089 / Jitsi 8447 / JVB UDP 10007
+> 默认端口：前端 19307 / ASR WS 19087 / ASR HTTP 19089 / Jitsi 19447 / JVB UDP 19107
 
 ### 一、本地部署（macOS）
 
@@ -107,10 +107,10 @@ cd silan-asr-service && conda activate asr
 python main.py --device cpu
 
 # 3. 前端
-cd frontend && npm install && npx vite --port 3007 --host
+cd frontend && npm install && npx vite --port 19307 --host
 ```
 
-浏览器打开 `https://localhost:3007`。停止 Jitsi：`./stop.sh`
+浏览器打开 `https://localhost:19307`。停止 Jitsi：`./stop.sh`
 
 ### 二、服务端部署（Linux）
 
@@ -134,23 +134,23 @@ cd silan-asr-service
 conda activate asr
 pip install -r requirements.txt && playwright install chromium
 setsid nohup env BOT_HEADLESS=true \
-    /home/asr/bin/python main.py --device cpu --host 0.0.0.0 --port 8087 \
+    /home/asr/bin/python main.py --device cpu --host 0.0.0.0 --port 19087 \
     > logs/asr.log 2>&1 < /dev/null & disown
 tail -f logs/asr.log
 
 # 4. 前端（后台运行）
 cd ../frontend && npm install
 mkcert -key-file localhost+3-key.pem -cert-file localhost+3.pem localhost 127.0.0.1 <SERVER_IP> ::1
-setsid nohup npx vite --port 3007 --host > vite.log 2>&1 < /dev/null & disown
+setsid nohup npx vite --port 19307 --host > vite.log 2>&1 < /dev/null & disown
 tail -f vite.log
 
 # 5. 防火墙
-sudo iptables -I INPUT -p tcp --dport 3007 -j ACCEPT
-sudo iptables -I INPUT -p tcp --dport 8447 -j ACCEPT
-sudo iptables -I INPUT -p udp --dport 10007 -j ACCEPT
+sudo iptables -I INPUT -p tcp --dport 19307 -j ACCEPT
+sudo iptables -I INPUT -p tcp --dport 19447 -j ACCEPT
+sudo iptables -I INPUT -p udp --dport 19107 -j ACCEPT
 ```
 
-验证：`curl -s http://localhost:8089/health`，浏览器打开 `https://<SERVER_IP>:3007`
+验证：`curl -s http://localhost:19089/health`，浏览器打开 `https://<SERVER_IP>:19307`
 
 **停止**：`cd jitsi && docker compose down` / `pkill -f "python main.py"` / `pkill -f vite`
 
@@ -163,7 +163,7 @@ sudo iptables -I INPUT -p udp --dport 10007 -j ACCEPT
 编辑 `silan-asr-service/app/config/settings.py`：
 
 ```python
-port: int = 8087  # WebSocket 端口，Flask API 自动运行在 port + 2
+port: int = 19087  # WebSocket 端口，Flask API 自动运行在 port + 2
 ```
 
 ### 切换 Jitsi 服务
@@ -189,8 +189,8 @@ export const CURRENT_JITSI = 'local'; // 'public' | 'local'
 
 ##  WebSocket 事件
 
-前端通过原生 WebSocket 与后端通信（开发时通过 Vite 代理 `/ws` → `ws://localhost:8087`）。
-同时通过 Socket.IO 订阅房间级广播事件（开发时 Vite 代理 `/socket.io` → `http://localhost:8089`）。
+前端通过原生 WebSocket 与后端通信（开发时通过 Vite 代理 `/ws` → `ws://localhost:19087`）。
+同时通过 Socket.IO 订阅房间级广播事件（开发时 Vite 代理 `/socket.io` → `http://localhost:19089`）。
 
 ### 会议信令（原 WebSocket）
 
@@ -253,7 +253,7 @@ export const CURRENT_JITSI = 'local'; // 'public' | 'local'
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
-| `--port` | 8087 | WebSocket 服务端口 |
+| `--port` | 19087 | WebSocket 服务端口 |
 | `--host` | 0.0.0.0 | 服务监听地址 |
 | `--device` | cpu | 推理设备 (cpu/cuda) |
 | `--log-level` | INFO | 日志级别 |
@@ -269,7 +269,7 @@ export const CURRENT_JITSI = 'local'; // 'public' | 'local'
 
 ```bash
 # 端口被占用
-lsof -i :8087
+lsof -i :19087
 
 # 强制使用 CPU
 python main.py --device cpu

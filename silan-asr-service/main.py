@@ -52,8 +52,8 @@ def main():
     parser.add_argument(
         "--port",
         type=int,
-        default=int(os.getenv("GATEWAY_PORT", "8087")),
-        help="服务端口号 (默认: 8087 或 .env 中的 GATEWAY_PORT)"
+        default=int(os.getenv("GATEWAY_PORT", "19087")),
+        help="服务端口号 (默认: 19087 或 .env 中的 GATEWAY_PORT)"
     )
     parser.add_argument(
         "--host",
