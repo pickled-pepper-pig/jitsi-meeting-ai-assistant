@@ -35,8 +35,7 @@ desktop.ini
 .cache/torch/
 
 # === Jitsi 运行时数据 ===
-jitsi/jitsi-meet-cfg/prosody/config/data/
-jitsi/jitsi-meet-cfg/prosody/config/certs/
+jitsi/jitsi-meet-cfg/
 
 # === 构建产物 ===
 backend/dist/
