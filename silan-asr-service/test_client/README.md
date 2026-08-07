@@ -34,7 +34,7 @@ python -m test_client.gen_test_audio --engine edge
 ### 2. 启动 ASR 服务
 
 ```bash
-python main.py --device cpu --port 8080 --host 0.0.0.0
+python main.py --device cpu --port 8087 --host 0.0.0.0
 ```
 
 ### 3. 评估识别质量
@@ -139,7 +139,7 @@ from test_client.asr_client import ASRClient
 
 async def simulate_user(user_id, wav_path):
     client = ASRClient(
-        ws_url="ws://127.0.0.1:8080",
+        ws_url="ws://127.0.0.1:8087",
         meeting_id="multi-test",
         participant_id=user_id,
         participant_name=f"用户{user_id}",

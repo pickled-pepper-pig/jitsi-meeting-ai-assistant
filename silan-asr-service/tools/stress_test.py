@@ -9,7 +9,7 @@
   --speakers   并发参会者数量（默认 4）
   --duration   每个参会者持续喂音频的秒数（默认 30）
   --room       房间 ID（默认 stress）
-  --server     WS 服务器 URL（默认 ws://localhost:8080）
+  --server     WS 服务器 URL（默认 ws://localhost:8087）
   --token      JWT token（必填，会自动申请，无需手动传）
 
 测试内容：
@@ -298,8 +298,8 @@ async def main():
     parser.add_argument('--speakers', type=int, default=4, help='并发参会者数量')
     parser.add_argument('--duration', type=int, default=30, help='每个参会者持续喂音频的秒数')
     parser.add_argument('--room', type=str, default='stress', help='房间 ID')
-    parser.add_argument('--server', type=str, default='ws://localhost:8080', help='WS 服务器 URL')
-    parser.add_argument('--flask', type=str, default='http://localhost:8082', help='Flask API URL')
+    parser.add_argument('--server', type=str, default='ws://localhost:8087', help='WS 服务器 URL')
+    parser.add_argument('--flask', type=str, default='http://localhost:8089', help='Flask API URL')
     parser.add_argument('--wav', type=str, default=DEFAULT_WAV, help='真实语音 WAV 文件路径（默认 long_sentence.wav）')
     args = parser.parse_args()
 

@@ -46,7 +46,7 @@ class SessionManagerConfig:
 @dataclass
 class AudioGatewayConfig:
     host: str = "0.0.0.0"
-    port: int = 8080
+    port: int = 8087
     max_concurrent_streams: int = 1000
 
 
@@ -89,7 +89,7 @@ def load_config() -> AppConfig:
     config.asr_worker.max_batch_size = int(os.getenv("ASR_MAX_BATCH_SIZE", "32"))
     config.asr_worker.max_concurrent_sessions = int(os.getenv("ASR_MAX_SESSIONS", "100"))
     
-    config.audio_gateway.port = int(os.getenv("GATEWAY_PORT", "8080"))
+    config.audio_gateway.port = int(os.getenv("GATEWAY_PORT", "8087"))
     config.audio_gateway.host = os.getenv("GATEWAY_HOST", "0.0.0.0")
     
     config.kafka.bootstrap_servers = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")

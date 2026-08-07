@@ -8,7 +8,7 @@
 
 使用：
   python -m test_client.wav_stream_client --wav test.wav
-  python -m test_client.wav_stream_client --wav test.wav --ws ws://192.168.1.10:8080
+  python -m test_client.wav_stream_client --wav test.wav --ws ws://192.168.1.10:8087
   python -m test_client.wav_stream_client --wav test.wav --speed 0.5  # 半速（更易观察 partial）
 """
 
@@ -27,7 +27,7 @@ from test_client.asr_client import ASRClient, load_wav_as_float32
 async def main():
     parser = argparse.ArgumentParser(description="WAV 流式 ASR 测试客户端")
     parser.add_argument("--wav", required=True, help="WAV 文件路径（任意采样率/通道数，自动转 16k mono）")
-    parser.add_argument("--ws", default="ws://127.0.0.1:8080", help="ASR WebSocket 地址")
+    parser.add_argument("--ws", default="ws://127.0.0.1:8087", help="ASR WebSocket 地址")
     parser.add_argument("--meeting", default="test-meeting", help="会议 ID")
     parser.add_argument("--user", default="测试用户", help="参与者名称")
     parser.add_argument("--speed", type=float, default=1.0, help="播放速度（1.0=实时，0.5=半速，2.0=2 倍速）")

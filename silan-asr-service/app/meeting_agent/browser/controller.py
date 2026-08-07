@@ -27,7 +27,7 @@ def _build_recorder_ws_url(meeting_id: str) -> str:
     - SSL_CERT_DIR 配置了证书 → wss://
     - 否则 → ws://（Bot 本地连接，无需 SSL）
     """
-    port = int(os.getenv("GATEWAY_PORT", "8080"))
+    port = int(os.getenv("GATEWAY_PORT", "8087"))
     host = os.getenv("GATEWAY_HOST", "0.0.0.0")
     # Bot 与 Python 服务在同一台机器，直接走 127.0.0.1
     connect_host = "127.0.0.1" if host in ("0.0.0.0", "") else host

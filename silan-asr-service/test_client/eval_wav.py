@@ -73,7 +73,7 @@ def wer(ref: str, hyp: str) -> float:
 async def eval_single_wav(
     wav_path: Path,
     ground_truth: str = None,
-    ws_url: str = "ws://127.0.0.1:8080",
+    ws_url: str = "ws://127.0.0.1:8087",
     speed: float = 1.0,
     verbose: bool = False,
 ) -> dict:
@@ -161,7 +161,7 @@ async def main():
     parser = argparse.ArgumentParser(description="ASR 识别质量评估")
     parser.add_argument("--wav", help="WAV 文件路径")
     parser.add_argument("--gt", "--ground-truth", help="ground truth 文本")
-    parser.add_argument("--ws", default="ws://127.0.0.1:8080", help="ASR WebSocket 地址")
+    parser.add_argument("--ws", default="ws://127.0.0.1:8087", help="ASR WebSocket 地址")
     parser.add_argument("--speed", type=float, default=1.0, help="播放速度")
     parser.add_argument("--batch", help="批量评估清单 JSONL，每行 {wav, gt}")
     parser.add_argument("-v", "--verbose", action="store_true", help="详细输出")

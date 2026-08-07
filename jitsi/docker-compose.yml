@@ -4,8 +4,8 @@ services:
         image: jitsi/web:${JITSI_IMAGE_VERSION:-stable-9646}
         restart: ${RESTART_POLICY:-unless-stopped}
         ports:
-            - '${HTTP_PORT:-8000}:80'
-            - '${HTTPS_PORT:-8443}:443'
+            - '${HTTP_PORT:-8007}:80'
+            - '${HTTPS_PORT:-8447}:443'
         volumes:
             - ${CONFIG}/web/custom:/custom
             - ${CONFIG}/web/letsencrypt:/etc/letsencrypt
@@ -183,8 +183,8 @@ services:
         image: jitsi/jvb:${JITSI_IMAGE_VERSION:-stable-9646}
         restart: ${RESTART_POLICY:-unless-stopped}
         ports:
-            - '${JVB_PORT:-10000}:${JVB_PORT:-10000}/udp'
-            - '${JVB_HTTP_PORT:-8080}:8080'
+            - '${JVB_PORT:-10007}:${JVB_PORT:-10007}/udp'
+            - '${JVB_HTTP_PORT:-8088}:8080'
         volumes:
             - ${CONFIG}/jvb:/config
         environment:

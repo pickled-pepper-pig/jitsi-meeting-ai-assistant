@@ -25,7 +25,7 @@ export default defineConfig({
       cert: fs.readFileSync(certPath),
     } : undefined,
     proxy: {
-      // HTTP API → Flask (8082)
+      // HTTP API → Flask (8089)
       '/api': {
         target: FLASK_TARGET,
         changeOrigin: true,
@@ -36,7 +36,7 @@ export default defineConfig({
         changeOrigin: true,
         secure: false,
       },
-      // WebSocket 升级 → WebSocket 服务 (8080)
+      // WebSocket 升级 → WebSocket 服务 (8087)
       // 原生 WebSocket 连接会走这个代理
       '/ws': {
         target: WS_TARGET,

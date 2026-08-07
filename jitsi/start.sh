@@ -51,11 +51,11 @@ if [ -f .env ]; then
         
         sed -i '' "s|^LOCAL_IP=.*|LOCAL_IP=$CURRENT_IP|" .env
         
-        echo "📜 重新生成 Jitsi 证书（8443）..."
+        echo "📜 重新生成 Jitsi 证书（8447）..."
         mkdir -p certs
         mkcert -cert-file certs/jitsi.crt -key-file certs/jitsi.key localhost 127.0.0.1 "$CURRENT_IP" ::1 > /dev/null 2>&1
         
-        echo "📜 重新生成前端 Vite 证书（3000）..."
+        echo "📜 重新生成前端 Vite 证书（3007）..."
         FRONTEND_DIR="$SCRIPT_DIR/../frontend"
         if [ -d "$FRONTEND_DIR" ]; then
             mkcert -cert-file "$FRONTEND_DIR/localhost+3.pem" -key-file "$FRONTEND_DIR/localhost+3-key.pem" localhost 127.0.0.1 "$CURRENT_IP" ::1 > /dev/null 2>&1
@@ -78,8 +78,8 @@ fi
 
 # 启动 Jitsi 服务
 echo "🚀 启动 Jitsi 服务..."
-echo "   - Web:  http://localhost:8000"
-echo "   - HTTPS: https://localhost:8443 (自签名证书，浏览器会警告)"
+echo "   - Web:  http://localhost:8007"
+echo "   - HTTPS: https://localhost:8447 (自签名证书，浏览器会警告)"
 echo ""
 echo "   ⚠️  首次启动需要下载镜像，可能需要几分钟..."
 echo ""
@@ -101,9 +101,9 @@ echo "  Jitsi 本地服务已启动"
 echo "=========================================="
 echo ""
 echo "  访问地址："
-echo "    - HTTP:  http://localhost:8000"
-echo "    - HTTPS: https://localhost:8443"
-echo "    - 局域网: https://$CURRENT_IP:8443"
+echo "    - HTTP:  http://localhost:8007"
+echo "    - HTTPS: https://localhost:8447"
+echo "    - 局域网: https://$CURRENT_IP:8447"
 echo ""
 echo "  注意事项："
 echo "    1. HTTPS 是自签名证书，浏览器会提示不安全，点击'继续访问'即可"

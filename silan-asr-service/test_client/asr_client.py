@@ -96,7 +96,7 @@ class ASRClient:
 
     def __init__(
         self,
-        ws_url: str = "ws://127.0.0.1:8080",
+        ws_url: str = "ws://127.0.0.1:8087",
         meeting_id: str = "test-meeting",
         participant_id: str = "test-user",
         participant_name: str = "测试用户",
