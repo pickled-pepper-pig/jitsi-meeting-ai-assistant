@@ -11,13 +11,13 @@ jitsi/
 ├── jitsi/                        # Jitsi Meet（Docker Compose）
 │   ├── docker-compose.yml        # 编排 Web / Jicofo / JVB / Prosody
 │   ├── jitsi-meet-cfg/           # 各组件配置 + JWT 鉴权
-│   ├── certs/                    # mkcert 自签证书（8443 端口）
+│   ├── certs/                    # mkcert 自签证书（8447 端口）
 │   ├── start.sh                  # 一键启动脚本（自动检测 IP + 重新生成证书）
 │   ├── stop.sh                   # 停止脚本
 │   └── .env                      # 局域网 IP / 鉴权开关
 │
 ├── silan-asr-service/            # 后端 ASR + 会议服务（Python）
-│   ├── main.py                   # 启动入口（WebSocket 8080 + Flask HTTP 8082）
+│   ├── main.py                   # 启动入口（WebSocket 8087 + Flask HTTP 8089）
 │   ├── app/
 │   │   ├── audio_gateway/        # WS 网关 + 转写聚合器
 │   │   │   ├── ws_server.py      #   WebSocket 服务（会议房间 + ASR 音频）
@@ -56,7 +56,7 @@ jitsi/
 │                                                             │
 │  ┌──────────────┐  ┌──────────────────┐  ┌───────────────┐  │
 │  │ Jitsi IFrame │  │ ParticipantAudio  │  │ useWebSocket  │  │
-│  │ (8443 HTTPS) │  │ Receiver          │  │ (会议房间消息) │  │
+│  │ (8447 HTTPS) │  │ Receiver          │  │ (会议房间消息) │  │
 │  │              │  │ (远程参会者音频)    │  │               │  │
 │  └──────┬───────┘  └────────┬─────────┘  └──────┬────────┘  │
 │         │ postMessage        │ WebSocket          │ WebSocket│
@@ -67,8 +67,8 @@ jitsi/
 │  Jitsi Docker      │  │  silan-asr-service (Python)          │
 │  Web/Jicofo/JVB/   │  │                                      │
 │  Prosody           │  │  ┌─────────────┐  ┌──────────────┐   │
-│  JWT 鉴权(HS256)    │  │  │ WS 网关 8080 │  │ Flask 8082   │   │
-│  8443/10000/5222   │  │  │  会议房间     │  │  HTTP API    │   │
+│  JWT 鉴权(HS256)    │  │  │ WS 网关 8087 │  │ Flask 8089   │   │
+│  8447/10007/5222   │  │  │  会议房间     │  │  HTTP API    │   │
 └────────────────────┘  │  │  ASR 音频     │  │  Bot Spawn   │   │
                         │  └──────┬──────┘  └──────┬───────┘   │
                         │         │                │           │
@@ -116,7 +116,7 @@ Jitsi Meet 由 4 个独立服务组件组成，手动部署需要分别安装配
 前端通过 Jitsi Meet External API 将视频会议嵌入为 iframe，不直接渲染视频流，而是通过 `postMessage` 与 iframe 内的 Jitsi 客户端通信。
 
 **加载流程**：
-1. 动态加载 `https://{host}:8443/external_api.js`（`useJitsiApi.ts`）
+1. 动态加载 `https://{host}:8447/external_api.js`（`useJitsiApi.ts`）
 2. 用 `new JitsiMeetExternalAPI(domain, options)` 创建 iframe
 3. 通过 `executeCommand` / `addEventListener` 控制 会议
 
@@ -134,8 +134,8 @@ Jitsi Meet 由 4 个独立服务组件组成，手动部署需要分别安装配
 
 | 连接 | 用途 | 端口 | 生命周期 |
 |---|---|---|---|
-| `useWebSocket` | 会议房间消息（聊天 / 转写 / AI 状态 / 同步） | 8080 | 加入会议后持续 |
-| `audioCapture` / `ParticipantAudioReceiver` | ASR 音频上传（audio_chunk） | 8080 | 录制期间 |
+| `useWebSocket` | 会议房间消息（聊天 / 转写 / AI 状态 / 同步） | 8087 | 加入会议后持续 |
+| `audioCapture` / `ParticipantAudioReceiver` | ASR 音频上传（audio_chunk） | 8087 | 录制期间 |
 
 两者连接同一个后端 WS 服务（`ws_server.py`），但通过不同的 `action` 消息分流：会议消息走 `join` / `chat` / `sync`，音频走 `create_session` / `audio_chunk`。
 
@@ -436,11 +436,11 @@ cd jitsi/jitsi && ./start.sh
 cd silan-asr-service
 pip install -r requirements.txt
 cp .env.example .env   # 填 JWT 密钥
-python main.py --device cpu --port 8080 --host 0.0.0.0
+python main.py --device cpu --port 8087 --host 0.0.0.0
 
 # 3. 启动前端
 cd frontend && npm install && npm run dev
-# 浏览器打开 https://localhost:3000
+# 浏览器打开 https://localhost:3007
 ```
 
 > `./start.sh` 会自动检测局域网 IP，当 IP 变化时自动更新 `.env`、重新生成 SSL 证书并重启容器。
@@ -451,11 +451,11 @@ cd frontend && npm install && npm run dev
 
 | 端口 | 用途 |
 |---|---|
-| 8443 | Jitsi Web（HTTPS，mkcert 自签证书） |
-| 3000 | Vite 前端开发服务器（HTTPS，mkcert 自签证书） |
-| 8080 | 后端 WebSocket（会议房间 + ASR 音频 + Bot recorder） |
-| 8082 | 后端 Flask HTTP（API / 健康检查） |
-| 10000/UDP | Jitsi JVB 媒体流 |
+| 8447 | Jitsi Web（HTTPS，mkcert 自签证书） |
+| 3007 | Vite 前端开发服务器（HTTPS，mkcert 自签证书） |
+| 8087 | 后端 WebSocket（会议房间 + ASR 音频 + Bot recorder） |
+| 8089 | 后端 Flask HTTP（API / 健康检查） |
+| 10007/UDP | Jitsi JVB 媒体流 |
 | 5222 | Prosody XMPP |
 | 6379 | Redis（状态持久化） |
 
