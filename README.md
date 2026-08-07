@@ -131,7 +131,7 @@ mkcert -key-file certs/jitsi.key -cert-file certs/jitsi.crt localhost 127.0.0.1 
 
 # 3. 后端 ASR（conda 环境，后台运行）
 cd silan-asr-service
-conda create -n asr python=3.11 -y && conda activate asr
+conda activate asr
 pip install -r requirements.txt && playwright install chromium
 setsid nohup env BOT_HEADLESS=true \
     /home/asr/bin/python main.py --device cpu --host 0.0.0.0 --port 8087 \
@@ -142,6 +142,7 @@ tail -f logs/asr.log
 cd ../frontend && npm install
 mkcert -key-file localhost+3-key.pem -cert-file localhost+3.pem localhost 127.0.0.1 <SERVER_IP> ::1
 setsid nohup npx vite --port 3007 --host > vite.log 2>&1 < /dev/null & disown
+tail -f vite.log
 
 # 5. 防火墙
 sudo iptables -I INPUT -p tcp --dport 3007 -j ACCEPT
