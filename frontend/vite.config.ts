@@ -9,16 +9,16 @@ const keyPath = path.join(__dirname, 'localhost+3-key.pem')
 const certPath = path.join(__dirname, 'localhost+3.pem')
 const useSsl = fs.existsSync(keyPath) && fs.existsSync(certPath)
 
-// Flask HTTP API (后台线程，端口 8082，避免与 Jitsi JVB 8081 冲突)
-const FLASK_TARGET = 'http://127.0.0.1:8082'
-// WebSocket 服务 (主线程，端口 8080)
-const WS_TARGET = 'http://127.0.0.1:8080'
+// Flask HTTP API (后台线程，端口 8089，避免与 Jitsi JVB 8088 冲突)
+const FLASK_TARGET = 'http://127.0.0.1:8089'
+// WebSocket 服务 (主线程，端口 8087)
+const WS_TARGET = 'http://127.0.0.1:8087'
 
 export default defineConfig({
   plugins: [react()],
   server: {
     host: true,
-    port: 3000,
+    port: 3007,
     strictPort: false,
     https: useSsl ? {
       key: fs.readFileSync(keyPath),

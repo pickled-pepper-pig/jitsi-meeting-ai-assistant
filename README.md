@@ -85,10 +85,10 @@ silan-jitsi/
 
 | 服务 | 端口 | 说明 |
 |------|------|------|
-| 前端 (Vite) | **3000** | https://localhost:3000 |
-| ASR WebSocket | **8080** | ws://localhost:8080 |
-| 后端 HTTP API | **8082** | http://localhost:8082（Flask，自动 = WS + 2） |
-| Jitsi Meet | **8443** | https://localhost:8443 |
+| 前端 (Vite) | **3007** | https://localhost:3007 |
+| ASR WebSocket | **8087** | ws://localhost:8087 |
+| 后端 HTTP API | **8089** | http://localhost:8089（Flask，自动 = WS + 2） |
+| Jitsi Meet | **8447** | https://localhost:8447 |
 
 ---
 
@@ -100,7 +100,7 @@ silan-jitsi/
 cd jitsi/jitsi
 ./start.sh          # macOS
 ./start-linux.sh    # Linux 服务器
-# Jitsi 运行在 https://localhost:8443
+# Jitsi 运行在 https://localhost:8447
 ```
 
 > 使用启动脚本而非 `docker compose up -d`。脚本会自动检测局域网 IP，
@@ -119,8 +119,8 @@ cd jitsi/jitsi
 conda activate asr
 cd silan-asr-service
 python main.py --device cpu
-# WebSocket 监听 0.0.0.0:8080
-# Flask HTTP API 自动监听 127.0.0.1:8082
+# WebSocket 监听 0.0.0.0:8087
+# Flask HTTP API 自动监听 127.0.0.1:8089
 ```
 
 ### 3. 启动前端（Vite）
@@ -128,8 +128,8 @@ python main.py --device cpu
 ```bash
 cd frontend
 npm install
-npx vite --port 3000 --host
-# 前端运行在 https://localhost:3000
+npx vite --port 3007 --host
+# 前端运行在 https://localhost:3007
 ```
 
 ### 4. ASR 链路测试
@@ -151,7 +151,7 @@ cd /Users/apple/Projects/silan/jitsi/silan-asr-service
 
 # 3. 启动前端（新终端）
 cd /Users/apple/Projects/silan/jitsi/frontend
-npx vite --port 3000 --host
+npx vite --port 3007 --host
 ```
 
 ---
@@ -163,7 +163,7 @@ npx vite --port 3000 --host
 编辑 `silan-asr-service/app/config/settings.py`：
 
 ```python
-port: int = 8080  # WebSocket 端口，Flask API 自动运行在 port + 2
+port: int = 8087  # WebSocket 端口，Flask API 自动运行在 port + 2
 ```
 
 ### 切换 Jitsi 服务
@@ -192,14 +192,14 @@ export const CURRENT_JITSI = 'local'; // 'public' | 'local'
 ### 健康检查
 
 ```bash
-GET http://localhost:8082/health
+GET http://localhost:8089/health
 ```
 
 ### Token 管理
 
 ```bash
 # 获取 Jitsi JWT Token
-POST http://localhost:8082/api/tokens
+POST http://localhost:8089/api/tokens
 Content-Type: application/json
 
 {
@@ -210,15 +210,15 @@ Content-Type: application/json
 }
 
 # 验证 Token
-POST http://localhost:8082/api/tokens/verify
+POST http://localhost:8089/api/tokens/verify
 {"token": "your-jwt-token"}
 
 # 检查是否主持人
-POST http://localhost:8082/api/tokens/is-moderator
+POST http://localhost:8089/api/tokens/is-moderator
 {"token": "your-jwt-token"}
 
 # 开发环境生成测试 Token
-POST http://localhost:8082/api/dev/tokens
+POST http://localhost:8089/api/dev/tokens
 Content-Type: application/json
 
 {
@@ -231,7 +231,7 @@ Content-Type: application/json
 
 ```bash
 # 开启 AI 助手
-POST http://localhost:8082/api/meetings/{roomId}/ai/start
+POST http://localhost:8089/api/meetings/{roomId}/ai/start
 Content-Type: application/json
 
 {
@@ -239,7 +239,7 @@ Content-Type: application/json
 }
 
 # 停止 AI 助手
-POST http://localhost:8082/api/meetings/{roomId}/ai/stop
+POST http://localhost:8089/api/meetings/{roomId}/ai/stop
 Content-Type: application/json
 
 {
@@ -247,14 +247,14 @@ Content-Type: application/json
 }
 
 # 获取会议 AI 状态
-GET http://localhost:8082/api/meetings/{roomId}/ai/status?token=your-jwt-token
+GET http://localhost:8089/api/meetings/{roomId}/ai/status?token=your-jwt-token
 ```
 
 ### 参会者 & ASR Session
 
 ```bash
 # 注册参会者
-POST http://localhost:8082/api/meetings/{roomId}/participants
+POST http://localhost:8089/api/meetings/{roomId}/participants
 Content-Type: application/json
 
 {
@@ -263,7 +263,7 @@ Content-Type: application/json
 }
 
 # 注册 ASR Session
-POST http://localhost:8082/api/meetings/{roomId}/asr-sessions
+POST http://localhost:8089/api/meetings/{roomId}/asr-sessions
 Content-Type: application/json
 
 {
@@ -276,7 +276,7 @@ Content-Type: application/json
 ### 审计日志
 
 ```bash
-GET http://localhost:8082/api/audit-logs?roomId=room-a
+GET http://localhost:8089/api/audit-logs?roomId=room-a
 ```
 
 ### 会议历史消息
@@ -284,7 +284,7 @@ GET http://localhost:8082/api/audit-logs?roomId=room-a
 ```bash
 # 拉取指定房间的所有历史消息（chat / summary / transcript）
 # 支持 since_seq 增量参数
-GET http://localhost:8082/api/meetings/{roomId}/messages?token=your-jwt-token[&since_seq=0]
+GET http://localhost:8089/api/meetings/{roomId}/messages?token=your-jwt-token[&since_seq=0]
 ```
 
 新加入者通过此接口 + WS `room_state_snapshot` 双重兜底拉到进入前的会议纪要。
@@ -295,16 +295,16 @@ GET http://localhost:8082/api/meetings/{roomId}/messages?token=your-jwt-token[&s
 
 ```bash
 # 拉起 Recorder Bot 加入会议
-POST http://localhost:8082/api/meetings/{roomId}/bot/spawn
+POST http://localhost:8089/api/meetings/{roomId}/bot/spawn
 Content-Type: application/json
 
 {
   "token": "your-moderator-token",
-  "roomUrl": "https://192.0.36.227:8443"
+  "roomUrl": "https://192.0.36.227:8447"
 }
 
 # 停止 Bot
-POST http://localhost:8082/api/meetings/{roomId}/bot/kill
+POST http://localhost:8089/api/meetings/{roomId}/bot/kill
 Content-Type: application/json
 
 {
@@ -312,10 +312,10 @@ Content-Type: application/json
 }
 
 # 查询 Bot 状态
-GET http://localhost:8082/api/meetings/{roomId}/bot/status?token=your-moderator-token
+GET http://localhost:8089/api/meetings/{roomId}/bot/status?token=your-moderator-token
 
 # 列出所有 Bot（调试用）
-GET http://localhost:8082/api/bots
+GET http://localhost:8089/api/bots
 ```
 
 Bot 侧 PCM 通过独立 WebSocket 路径 `/ws/recorder/{meeting_id}` 上行，与会议/ASR 通道隔离。
@@ -324,8 +324,8 @@ Bot 侧 PCM 通过独立 WebSocket 路径 `/ws/recorder/{meeting_id}` 上行，�
 
 ## 🔗 WebSocket 事件
 
-前端通过原生 WebSocket 与后端通信（开发时通过 Vite 代理 `/ws` → `ws://localhost:8080`）。
-同时通过 Socket.IO 订阅房间级广播事件（开发时 Vite 代理 `/socket.io` → `http://localhost:8082`）。
+前端通过原生 WebSocket 与后端通信（开发时通过 Vite 代理 `/ws` → `ws://localhost:8087`）。
+同时通过 Socket.IO 订阅房间级广播事件（开发时 Vite 代理 `/socket.io` → `http://localhost:8089`）。
 
 ### 会议信令（原 WebSocket）
 
@@ -388,7 +388,7 @@ Bot 侧 PCM 通过独立 WebSocket 路径 `/ws/recorder/{meeting_id}` 上行，�
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
-| `--port` | 8080 | WebSocket 服务端口 |
+| `--port` | 8087 | WebSocket 服务端口 |
 | `--host` | 0.0.0.0 | 服务监听地址 |
 | `--device` | cpu | 推理设备 (cpu/cuda) |
 | `--log-level` | INFO | 日志级别 |
@@ -404,7 +404,7 @@ Bot 侧 PCM 通过独立 WebSocket 路径 `/ws/recorder/{meeting_id}` 上行，�
 
 ```bash
 # 端口被占用
-lsof -i :8080
+lsof -i :8087
 
 # 强制使用 CPU
 python main.py --device cpu
