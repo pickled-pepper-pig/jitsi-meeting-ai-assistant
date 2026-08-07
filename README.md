@@ -133,7 +133,8 @@ mkcert -key-file certs/jitsi.key -cert-file certs/jitsi.crt localhost 127.0.0.1 
 cd silan-asr-service
 conda create -n asr python=3.11 -y && conda activate asr
 pip install -r requirements.txt && playwright install chromium
-setsid nohup env BOT_HEADLESS=true python main.py --device cpu --host 0.0.0.0 --port 8087 \
+setsid nohup env BOT_HEADLESS=true \
+    /home/asr/bin/python main.py --device cpu --host 0.0.0.0 --port 8087 \
     > logs/asr.log 2>&1 < /dev/null & disown
 tail -f logs/asr.log
 
