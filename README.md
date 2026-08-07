@@ -94,65 +94,63 @@ silan-jitsi/
 
 ## 快速开始
 
-### 1. 启动 Jitsi（Docker）
+> 默认端口：前端 3007 / ASR WS 8087 / ASR HTTP 8089 / Jitsi 8447 / JVB UDP 10007
+
+### 一、本地部署（macOS）
 
 ```bash
-cd jitsi/jitsi
-./start.sh          # macOS
-./start-linux.sh    # Linux 服务器
-# Jitsi 运行在 https://localhost:8447
-```
+# 1. Jitsi
+cd jitsi/jitsi && ./start.sh
 
-> 使用启动脚本而非 `docker compose up -d`。脚本会自动检测局域网 IP，
-> 当 IP 变化时自动更新 `.env`、重新生成 SSL 证书并重启容器，
-> 避免 WSS 连接因证书 IP 不匹配导致"你已断开连接"。
->
-> - **macOS** 用 `./start.sh`（通过 `ipconfig getifaddr` 获取 IP）
-> - **Linux** 用 `./start-linux.sh`（通过 `ip route` / `hostname -I` 获取 IP，`sed -i` 语法兼容 GNU）
->
-> 停止服务：`./stop.sh`
-
-### 2. 启动后端 ASR 服务（Python）
-
-```bash
-# 使用 conda asr 环境
-conda activate asr
-cd silan-asr-service
+# 2. 后端 ASR
+cd silan-asr-service && conda activate asr
 python main.py --device cpu
-# WebSocket 监听 0.0.0.0:8087
-# Flask HTTP API 自动监听 127.0.0.1:8089
+
+# 3. 前端
+cd frontend && npm install && npx vite --port 3007 --host
 ```
 
-### 3. 启动前端（Vite）
+浏览器打开 `https://localhost:3007`。停止 Jitsi：`./stop.sh`
+
+### 二、服务端部署（Linux）
+
+> 详细问题排查见 `SERVER_DEPLOY_GUIDE.md`（不进 git）
+
+**前置**：Docker、conda、mkcert、Node.js 22+
 
 ```bash
-cd frontend
-npm install
-npx vite --port 3007 --host
-# 前端运行在 https://localhost:3007
+# 1. 拉代码
+git pull origin main
+cd meeting-ai-assistant
+
+# 2. Jitsi（改 .env 的 LOCAL_IP 为服务器 IP，生成证书，启动）
+cd jitsi
+sed -i 's/LOCAL_IP=.*/LOCAL_IP=<SERVER_IP>/' .env
+mkcert -key-file certs/jitsi.key -cert-file certs/jitsi.crt localhost 127.0.0.1 <SERVER_IP> ::1
+./start-linux.sh
+
+# 3. 后端 ASR（conda 环境，后台运行）
+cd silan-asr-service
+conda create -n asr python=3.11 -y && conda activate asr
+pip install -r requirements.txt && playwright install chromium
+setsid nohup env BOT_HEADLESS=true python main.py --device cpu --host 0.0.0.0 --port 8087 \
+    > logs/asr.log 2>&1 < /dev/null & disown
+tail -f logs/asr.log
+
+# 4. 前端（后台运行）
+cd ../frontend && npm install
+mkcert -key-file localhost+3-key.pem -cert-file localhost+3.pem localhost 127.0.0.1 <SERVER_IP> ::1
+setsid nohup npx vite --port 3007 --host > vite.log 2>&1 < /dev/null & disown
+
+# 5. 防火墙
+sudo iptables -I INPUT -p tcp --dport 3007 -j ACCEPT
+sudo iptables -I INPUT -p tcp --dport 8447 -j ACCEPT
+sudo iptables -I INPUT -p udp --dport 10007 -j ACCEPT
 ```
 
-### 4. ASR 链路测试
+验证：`curl -s http://localhost:8089/health`，浏览器打开 `https://<SERVER_IP>:3007`
 
-```bash
-# 流式回放 wav 模拟真实会议
-python -m test_client.wav_stream_client --wav path/to/audio.wav
-```
-
-### 完整启动顺序
-
-```bash
-# 1. 启动 Jitsi
-cd /Users/apple/Projects/silan/jitsi/jitsi/jitsi && ./start.sh
-
-# 2. 启动后端（新终端）
-cd /Users/apple/Projects/silan/jitsi/silan-asr-service
-/Users/apple/miniconda3/envs/asr/bin/python main.py --device cpu
-
-# 3. 启动前端（新终端）
-cd /Users/apple/Projects/silan/jitsi/frontend
-npx vite --port 3007 --host
-```
+**停止**：`cd jitsi && docker compose down` / `pkill -f "python main.py"` / `pkill -f vite`
 
 ---
 
@@ -187,142 +185,7 @@ export const CURRENT_JITSI = 'local'; // 'public' | 'local'
 
 ---
 
-## 🔌 API 接口
-
-### 健康检查
-
-```bash
-GET http://localhost:8089/health
-```
-
-### Token 管理
-
-```bash
-# 获取 Jitsi JWT Token
-POST http://localhost:8089/api/tokens
-Content-Type: application/json
-
-{
-  "roomId": "room-a",
-  "userId": "user-001",
-  "role": "moderator",
-  "userName": "张三"
-}
-
-# 验证 Token
-POST http://localhost:8089/api/tokens/verify
-{"token": "your-jwt-token"}
-
-# 检查是否主持人
-POST http://localhost:8089/api/tokens/is-moderator
-{"token": "your-jwt-token"}
-
-# 开发环境生成测试 Token
-POST http://localhost:8089/api/dev/tokens
-Content-Type: application/json
-
-{
-  "roomId": "room-a",
-  "userId": "user-001"
-}
-```
-
-### 会议 AI 管理
-
-```bash
-# 开启 AI 助手
-POST http://localhost:8089/api/meetings/{roomId}/ai/start
-Content-Type: application/json
-
-{
-  "token": "your-jwt-token"
-}
-
-# 停止 AI 助手
-POST http://localhost:8089/api/meetings/{roomId}/ai/stop
-Content-Type: application/json
-
-{
-  "token": "your-jwt-token"
-}
-
-# 获取会议 AI 状态
-GET http://localhost:8089/api/meetings/{roomId}/ai/status?token=your-jwt-token
-```
-
-### 参会者 & ASR Session
-
-```bash
-# 注册参会者
-POST http://localhost:8089/api/meetings/{roomId}/participants
-Content-Type: application/json
-
-{
-  "token": "your-jwt-token",
-  "participant": {"id": "p1", "name": "张三"}
-}
-
-# 注册 ASR Session
-POST http://localhost:8089/api/meetings/{roomId}/asr-sessions
-Content-Type: application/json
-
-{
-  "token": "your-jwt-token",
-  "participantId": "p1",
-  "sessionId": "sess-001"
-}
-```
-
-### 审计日志
-
-```bash
-GET http://localhost:8089/api/audit-logs?roomId=room-a
-```
-
-### 会议历史消息
-
-```bash
-# 拉取指定房间的所有历史消息（chat / summary / transcript）
-# 支持 since_seq 增量参数
-GET http://localhost:8089/api/meetings/{roomId}/messages?token=your-jwt-token[&since_seq=0]
-```
-
-新加入者通过此接口 + WS `room_state_snapshot` 双重兜底拉到进入前的会议纪要。
-
-### Meeting Agent Bot 管理
-
-仅主持人 token 可调用。Bot JWT 由服务端重签为 "AI Assistant" 身份，不依赖调用方 token。
-
-```bash
-# 拉起 Recorder Bot 加入会议
-POST http://localhost:8089/api/meetings/{roomId}/bot/spawn
-Content-Type: application/json
-
-{
-  "token": "your-moderator-token",
-  "roomUrl": "https://192.0.36.227:8447"
-}
-
-# 停止 Bot
-POST http://localhost:8089/api/meetings/{roomId}/bot/kill
-Content-Type: application/json
-
-{
-  "token": "your-moderator-token"
-}
-
-# 查询 Bot 状态
-GET http://localhost:8089/api/meetings/{roomId}/bot/status?token=your-moderator-token
-
-# 列出所有 Bot（调试用）
-GET http://localhost:8089/api/bots
-```
-
-Bot 侧 PCM 通过独立 WebSocket 路径 `/ws/recorder/{meeting_id}` 上行，与会议/ASR 通道隔离。
-
----
-
-## 🔗 WebSocket 事件
+##  WebSocket 事件
 
 前端通过原生 WebSocket 与后端通信（开发时通过 Vite 代理 `/ws` → `ws://localhost:8087`）。
 同时通过 Socket.IO 订阅房间级广播事件（开发时 Vite 代理 `/socket.io` → `http://localhost:8089`）。
