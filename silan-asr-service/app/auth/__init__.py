@@ -14,6 +14,10 @@ PUBLIC_KEY_PATH = PROJECT_ROOT / "keys" / "public.pem"
 
 JWT_ISSUER = "meeting-ai"
 JWT_AUDIENCE = "jitsi"
+# Jitsi JWT 规范要求 sub 必须是 Jitsi XMPP_DOMAIN（见 jitsi/.env），
+# 不能是 room_id，否则 Prosody 验签通过但 sub 匹配失败 → 回退匿名 → 弹身份验证框。
+# 允许通过环境变量覆盖（多域名/生产环境可改）。
+JWT_SUBJECT = os.getenv("JWT_SUBJECT", "meet.jitsi")
 
 # 从环境变量读取算法，默认 HS256
 JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
@@ -112,7 +116,7 @@ def generate_jitsi_token(
 
     payload = {
         "iss": JWT_ISSUER,
-        "sub": room_id,
+        "sub": JWT_SUBJECT,
         "aud": JWT_AUDIENCE,
         "room": room_id,
         "userId": user_id,
