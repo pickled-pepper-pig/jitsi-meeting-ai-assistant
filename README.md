@@ -56,7 +56,7 @@ silan-jitsi/
 │   │   │   ├── audio/          # Bot 侧 PCM 接收 + 重采样 + wav 落盘
 │   │   │   └── participant/    # participant_id ↔ speaker_id 映射
 │   │   ├── auth/               # JWT 认证
-│   │   ├── llm_service/        # Mock LLM 总结
+│   │   ├── llm_service/        # LLM 会议总结（OpenAI 兼容 API）
 │   │   ├── audit_log/          # 审计日志
 │   │   └── config/            # 配置管理
 │   ├── resources/vocab/        # 行业热词库
@@ -298,5 +298,7 @@ MIT License
 - [x] Streaming ASR 实时转写（FunASR 流式 + 跨句累积 + 自动加标点）
 - [x] 房间级 AI 状态广播（Socket.IO 跨通道）
 - [x] 一房一主持人鉴权（先到先得）
-- [ ] LLM 接入真实大模型（目前为 Mock）
-- [ ] 对象存储集成
+- [x] LLM 接入真实大模型（OpenAI 兼容 API，deepseek-v4-flash）
+- [ ] Kafka 异步事件流集成（转写结果 → Kafka → 下游消费）
+- [ ] 多会议并发压测与性能优化
+- [ ] 会议录音文件云端归档（S3/OSS）
