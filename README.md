@@ -129,17 +129,19 @@ sed -i 's/LOCAL_IP=.*/LOCAL_IP=<SERVER_IP>/' .env
 mkcert -key-file certs/jitsi.key -cert-file certs/jitsi.crt localhost 127.0.0.1 <SERVER_IP> ::1
 ./start-linux.sh
 
-# 3. 后端 ASR（conda 环境，后台运行）
+# 3. 后端 ASR（conda 环境，先杀旧进程再后台运行）
 cd silan-asr-service
 conda activate asr
+pkill -f "python main.py" 2>/dev/null; sleep 1
 pip install -r requirements.txt && playwright install chromium
 setsid nohup env BOT_HEADLESS=true \
     /home/asr/bin/python main.py --device cpu --host 0.0.0.0 --port 19087 \
     > logs/asr.log 2>&1 < /dev/null & disown
 tail -f logs/asr.log
 
-# 4. 前端（后台运行）
+# 4. 前端（先杀旧进程再后台运行）
 cd ../frontend && npm install
+pkill -f "vite" 2>/dev/null; sleep 1
 mkcert -key-file localhost+3-key.pem -cert-file localhost+3.pem localhost 127.0.0.1 <SERVER_IP> ::1
 setsid nohup npx vite --port 19307 --host > vite.log 2>&1 < /dev/null & disown
 tail -f vite.log
@@ -184,6 +186,25 @@ export const CURRENT_JITSI = 'local'; // 'public' | 'local'
 ### Redis 配置
 
 默认地址：`redis://localhost:6379`，通过 `REDIS_URL` 环境变量覆盖。未配置时自动降级为内存存储。
+
+### LLM 配置（会议总结）
+
+复制 `silan-asr-service/.env.example` 为 `.env`，填写 LLM 相关配置：
+
+```bash
+cd silan-asr-service
+cp .env.example .env
+```
+
+| 环境变量 | 默认值 | 说明 |
+|----------|--------|------|
+| `LLM_API_KEY` | （无） | LLM API 密钥，未配置时回退到简单统计模式 |
+| `LLM_BASE_URL` | `https://slapi.silan.com.cn/v1` | OpenAI 兼容 API 地址 |
+| `LLM_MODEL` | `deepseek-v4-flash` | 模型名称 |
+| `LLM_TEMPERATURE` | `0.3` | 生成温度（0-1，越低越确定） |
+| `LLM_MAX_TOKENS` | `4096` | 最大输出 token 数 |
+| `LLM_TIMEOUT` | `60` | 请求超时（秒） |
+| `LLM_MAX_INPUT_CHARS` | `60000` | 输入文本最大字符数（超长时截取最近对话） |
 
 ---
 
