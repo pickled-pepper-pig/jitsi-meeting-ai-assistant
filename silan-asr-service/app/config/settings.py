@@ -72,6 +72,16 @@ class TranscriptServiceConfig:
 
 
 @dataclass
+class LLMConfig:
+    api_key: str = ""
+    base_url: str = "https://slapi.silan.com.cn/v1"
+    model: str = "deepseek-v4-flash"
+    temperature: float = 0.3
+    max_tokens: int = 4096
+    timeout: int = 60
+
+
+@dataclass
 class AppConfig:
     audio_processor: AudioProcessorConfig = field(default_factory=AudioProcessorConfig)
     asr_worker: ASRWorkerConfig = field(default_factory=ASRWorkerConfig)
@@ -80,6 +90,7 @@ class AppConfig:
     kafka: KafkaConfig = field(default_factory=KafkaConfig)
     normalization: NormalizationConfig = field(default_factory=NormalizationConfig)
     transcript_service: TranscriptServiceConfig = field(default_factory=TranscriptServiceConfig)
+    llm: LLMConfig = field(default_factory=LLMConfig)
 
 
 def load_config() -> AppConfig:
@@ -102,5 +113,13 @@ def load_config() -> AppConfig:
         "INDUSTRY_TERM_FILE",
         str(RESOURCES_DIR / "semiconductor_vocab.txt")
     )
-    
+
+    # LLM 配置
+    config.llm.api_key = os.getenv("LLM_API_KEY", "")
+    config.llm.base_url = os.getenv("LLM_BASE_URL", "https://slapi.silan.com.cn/v1")
+    config.llm.model = os.getenv("LLM_MODEL", "deepseek-v4-flash")
+    config.llm.temperature = float(os.getenv("LLM_TEMPERATURE", "0.3"))
+    config.llm.max_tokens = int(os.getenv("LLM_MAX_TOKENS", "4096"))
+    config.llm.timeout = int(os.getenv("LLM_TIMEOUT", "60"))
+
     return config

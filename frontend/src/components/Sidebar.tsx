@@ -1,6 +1,6 @@
 // 侧边栏组件 - 集成消息列表、总结按钮、合规提示
 
-import type { CSSProperties } from 'react';
+import { useState, useEffect, type CSSProperties } from 'react';
 import { ChatMessage, ConnectionStatus } from '../types';
 import { AudioCaptureState } from '../services/audioTypes';
 import { MessageList } from './MessageList';
@@ -27,6 +27,7 @@ interface SidebarProps {
   connectionStatus: ConnectionStatus;
   isModerator: boolean;
   aiEnabled: boolean;
+  summaryLoading: boolean;
   onCopyInvite?: () => void;
   inviteCopied?: boolean;
   onStartBot?: () => void;
@@ -41,8 +42,6 @@ interface SidebarProps {
   onFocusSpeaker?: (id: string | null) => void;
   // 真实参会者数量（含自己，来自 Jitsi IFrame API）
   participantsCount?: number;
-  // 主持人名字标注函数
-  tagModerator?: (name: string) => string;
   // 离开会议回调
   onLeave?: () => void;
   // 动态宽度（由外部分割线控制）
@@ -55,6 +54,7 @@ export function Sidebar({
   connectionStatus,
   isModerator,
   aiEnabled,
+  summaryLoading,
   onCopyInvite,
   inviteCopied,
   onStartBot,
@@ -66,7 +66,6 @@ export function Sidebar({
   focusedSpeakerId = null,
   onFocusSpeaker,
   participantsCount = 0,
-  tagModerator = (s) => s,
   onLeave,
   style,
 }: SidebarProps) {
@@ -82,6 +81,64 @@ export function Sidebar({
     connecting: 'status-connecting',
     reconnecting: 'status-reconnecting',
     disconnected: 'status-disconnected',
+  };
+
+  // Tab 切换：聊天记录 / 会议总结
+  const [activeTab, setActiveTab] = useState<'chat' | 'summary'>('chat');
+  // 聊天记录 Tab：显示所有消息（chat + summary），summary 卡片作为"分隔点"，
+  // 它前面到上一条 summary 之间的聊天会被折叠。
+  // 会议总结 Tab：只显示 summary 卡片（不带折叠聊天段）。
+  const summaryMessages = messages.filter((m) => m.type === 'summary');
+
+  // 折叠的聊天区间：key 是 summaryId，value 表示该 summary 到上一条 summary 之间的消息是否折叠
+  // 新生成的总结默认折叠，让用户聚焦于最新总结
+  const [collapsedRanges, setCollapsedRanges] = useState<Set<string>>(new Set());
+  const toggleRange = (summaryId: string) => {
+    setCollapsedRanges((prev) => {
+      const next = new Set(prev);
+      if (next.has(summaryId)) next.delete(summaryId);
+      else next.add(summaryId);
+      return next;
+    });
+  };
+
+  // 监听新增 summary：新总结产生时，把对应区间默认加入折叠集合，
+  // 并自动切到会议总结 Tab
+  useEffect(() => {
+    if (summaryMessages.length === 0) return;
+    const latestSummary = summaryMessages[summaryMessages.length - 1];
+    setCollapsedRanges((prev) => {
+      if (prev.has(latestSummary.id)) return prev;
+      const next = new Set(prev);
+      next.add(latestSummary.id);
+      return next;
+    });
+    // 仅在总结 Tab 不可见时切换，避免用户主动浏览时被强制跳转
+    setActiveTab('summary');
+  }, [summaryMessages.length]);
+
+  // 总结导航数据（从所有 summary 中提取，独立于当前 Tab，
+  // 让聊天记录 Tab 也能显示左侧目录跳转到对应总结）
+  const SUMMARY_NAV_THEMES = [
+    { bar: '#a855f7', bg: '#faf5ff', title: '#7c3aed', icon: '📋' },
+    { bar: '#0ea5e9', bg: '#f0f9ff', title: '#0284c7', icon: '📝' },
+    { bar: '#22c55e', bg: '#f0fdf4', title: '#16a34a', icon: '✅' },
+    { bar: '#f59e0b', bg: '#fffbeb', title: '#d97706', icon: '📌' },
+    { bar: '#ec4899', bg: '#fdf2f8', title: '#db2777', icon: '🎯' },
+  ];
+  const summaryNavItems = summaryMessages.map((msg, i) => ({
+    id: msg.id,
+    num: i + 1,
+    theme: SUMMARY_NAV_THEMES[i % SUMMARY_NAV_THEMES.length],
+  }));
+
+  // 切换 Tab 时滚动到底部（让最新内容可见）
+  const switchTab = (tab: 'chat' | 'summary') => {
+    setActiveTab(tab);
+    requestAnimationFrame(() => {
+      const list = document.querySelector('.message-list');
+      if (list) list.scrollTop = list.scrollHeight;
+    });
   };
 
   return (
@@ -187,7 +244,35 @@ export function Sidebar({
         )}
       </div>
 
-      <MessageList messages={messages} />
+      <div className="sidebar-tabs">
+        <button
+          className={`sidebar-tab ${activeTab === 'chat' ? 'active' : ''}`}
+          onClick={() => switchTab('chat')}
+        >
+          聊天记录
+          {messages.some((m) => m.type !== 'summary') && (
+            <span className="tab-badge">{messages.filter((m) => m.type !== 'summary').length}</span>
+          )}
+        </button>
+        <button
+          className={`sidebar-tab ${activeTab === 'summary' ? 'active' : ''}`}
+          onClick={() => switchTab('summary')}
+        >
+          会议总结
+          {summaryMessages.length > 0 && (
+            <span className="tab-badge">{summaryMessages.length}</span>
+          )}
+        </button>
+      </div>
+
+      <MessageList
+        messages={activeTab === 'chat' ? messages : summaryMessages}
+        showSummaryNav={false}
+        summaryNavItems={summaryNavItems}
+        collapsedRanges={collapsedRanges}
+        onToggleRange={toggleRange}
+        renderSummaryCards={activeTab === 'summary'}
+      />
 
       {/* 实时转写指示器 - 多 speaker 头像列表 + 选中聚焦查看 */}
       {Object.keys(remotePartials).length > 0 && (
@@ -195,11 +280,11 @@ export function Sidebar({
           // 头像列表按"首次说话"顺序展示（Object.values 保持插入序，不重排），
           // 避免 partial 更新时头像跳来跳去。
           const speakers = Object.values(remotePartials);
-          // 聚焦展示谁：用户选中 > 自动跟随最新（按最新 ts 选）
-          const latest = speakers.reduce((a, b) => (a.ts >= b.ts ? a : b), speakers[0]);
+          // 聚焦展示谁：用户选中 > 第一个说话的 speaker（保持不变，新说话人只加头像）
+          const firstSpeaker = speakers[0]; // 首次说话顺序保持不变
           const focusedId = focusedSpeakerId && remotePartials[focusedSpeakerId]
             ? focusedSpeakerId
-            : latest?.id;
+            : firstSpeaker?.id;
           const focused = focusedId ? remotePartials[focusedId] : null;
           return (
             <div className="partial-transcript">
@@ -255,9 +340,10 @@ export function Sidebar({
         <div className="sidebar-footer">
           <SummaryButton
             onSummarize={onSummarize}
-            disabled={!aiEnabled}
+            disabled={!aiEnabled || messages.length === 0}
             status={connectionStatus}
             isModerator={isModerator}
+            loading={summaryLoading}
           />
         </div>
       )}

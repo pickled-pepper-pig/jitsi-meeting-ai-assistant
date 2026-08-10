@@ -137,6 +137,8 @@ export function useJitsiApi(options: JitsiOptions, callbacks: JitsiEventCallback
             notifications: [],
             // 不让客户端根据"JWT 中没有 owner affiliation"自动升级
             enableUserRolesBasedOnToken: true,
+            // 禁用音频电平指示器（修复 lib-jitsi-meet 内部 SSRC 报错）
+            disableAudioLevels: true,
           },
           interfaceConfigOverwrite: {
             SHOW_JITSI_WATERMARK: false,

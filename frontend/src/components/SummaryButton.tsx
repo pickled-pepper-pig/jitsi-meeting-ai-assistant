@@ -1,6 +1,5 @@
 // 总结会议按钮组件
 
-import { useState } from 'react';
 import { ConnectionStatus } from '../types';
 
 interface SummaryButtonProps {
@@ -8,16 +7,12 @@ interface SummaryButtonProps {
   disabled: boolean;
   status: ConnectionStatus;
   isModerator: boolean;
+  loading: boolean;
 }
 
-export function SummaryButton({ onSummarize, disabled, status, isModerator }: SummaryButtonProps) {
-  const [loading, setLoading] = useState(false);
-
+export function SummaryButton({ onSummarize, disabled, status, isModerator, loading }: SummaryButtonProps) {
   const handleClick = () => {
-    setLoading(true);
     onSummarize();
-    // 1.5s 后恢复按钮状态（Mock LLM 延迟）
-    setTimeout(() => setLoading(false), 2000);
   };
 
   const isConnected = status === 'connected';
@@ -26,6 +21,7 @@ export function SummaryButton({ onSummarize, disabled, status, isModerator }: Su
   let tooltip = '';
   if (!isConnected) tooltip = '未连接到服务器';
   else if (!isModerator) tooltip = '只有主持人可以生成总结';
+  else if (disabled && !loading) tooltip = '没有聊天记录或转写内容，无法生成总结';
   else if (loading) tooltip = '正在生成总结...';
 
   return (

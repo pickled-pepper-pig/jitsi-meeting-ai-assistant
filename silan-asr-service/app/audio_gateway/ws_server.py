@@ -405,30 +405,24 @@ class WebSocketGatewayServer:
                 return
             payload = verify_token(token)
             room_id = client["room_id"]
-            messages = get_all_messages(room_id)
+            all_messages = get_all_messages(room_id)
+            # 每次总结都取所有非总结消息（从最新消息往前取，不超过模型最大输入长度由 LLM 层处理）
+            messages = [m for m in all_messages if m.get("type") != "summary"]
             await self._send(ws_id, {"type": "status", "message": "正在生成会议总结..."})
 
             def _do():
                 loop = asyncio.new_event_loop()
                 summary = loop.run_until_complete(generate_summary(room_id, messages))
-                # 空消息时 generate_summary 返回占位文案 "本次会议暂无聊天记录。"
-                # 不持久化也不广播，避免下一个人加入看到一条无意义的 summary。
                 if not messages or summary == "本次会议暂无聊天记录。":
                     asyncio.run_coroutine_threadsafe(
-                        self._send(ws_id, {"type": "status", "message": "本次会议暂无聊天记录，已省略总结。"}),
+                        self._send(ws_id, {"type": "status", "message": "没有新的聊天记录或转写内容，无需生成总结。"}),
                         self._loop,
                     )
                     return
-                # summary 也走 add_message，自动获得 seq + 持久化，
-                # 让后加入的用户能通过 sync/snapshot 拉到历史总结
                 summary_msg = add_message(room_id, {
                     "sender": "AI 助手", "content": summary,
                     "timestamp": int(time.time() * 1000), "type": "summary",
                 })
-                asyncio.run_coroutine_threadsafe(
-                    self._broadcast(room_id, {"type": "summary", "roomId": room_id, "summary": summary, "timestamp": summary_msg["timestamp"], "seq": summary_msg["seq"]}),
-                    self._loop,
-                )
                 asyncio.run_coroutine_threadsafe(
                     self._broadcast(room_id, {"type": "chat", "payload": summary_msg}),
                     self._loop,

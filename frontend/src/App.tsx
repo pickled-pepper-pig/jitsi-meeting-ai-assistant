@@ -96,6 +96,7 @@ export default function App() {
   // 通用弹窗（替代 alert，与 moderator_occupied 弹窗保持一致的样式）
   const [customAlert, setCustomAlert] = useState<{ icon: string; title: string; message: string } | null>(null);
   const [botStatus, setBotStatus] = useState<'idle' | 'starting' | 'started' | 'stopping'>('idle');
+  const [summaryLoading, setSummaryLoading] = useState(false);
   // 解决 React 闭包陷阱：handleTrackAdded 用 ref 取最新值，而不是闭包旧值
   const botStatusRef = useRef<'idle' | 'starting' | 'started' | 'stopping'>('idle');
   const updateBotStatus = (status: typeof botStatusRef.current) => {
@@ -192,13 +193,15 @@ export default function App() {
         if (messageBufferRef.current.add(message.payload)) {
           refreshMessages();
         }
+        if (message.payload?.type === 'summary') {
+          setSummaryLoading(false);
+        }
         break;
       case 'synced':
         messageBufferRef.current.addBatch(message.messages);
         refreshMessages();
         console.log(`[App] 同步完成，补齐 ${message.messages.length} 条消息`);
         break;
-      case 'summary':
         break;
       case 'ai_bot_status':
         // 房间级 AI Bot 状态（自己或别人开启都会收到）
@@ -236,23 +239,24 @@ export default function App() {
               delete next[pid];
               return next;
             });
-            setMessages(prev => {
-              // 去重：同内容 + 1.5s 内视为重复（跨链路去重：主持人本端 audioCapture 也可能产生同一条）
-              // 不要求 sender 完全相等：本路径 sender=wei（主持人），本端路径可能 sender=wei
-              const last = prev[prev.length - 1];
-              if (last && last.content === t.text && Math.abs(last.timestamp - ts) < 1500) {
-                return prev;
-              }
-              return [...prev, {
-                id: `remote-transcript-${ts}-${Math.random()}`,
-                seq: Date.now(),
-                roomId: roomName,
-                sender: speakerName,
-                content: t.text,
-                timestamp: ts,
-                type: 'text' as const,
-              }];
-            });
+            // 去重：同内容 + 1.5s 内视为重复（跨链路去重）
+            const current = messageBufferRef.current.getAll();
+            const last = current[current.length - 1];
+            if (last && last.content === t.text && Math.abs(last.timestamp - ts) < 1500) {
+              return;
+            }
+            const seq = Date.now();
+            if (messageBufferRef.current.add({
+              id: `remote-transcript-${ts}-${Math.random()}`,
+              seq,
+              roomId: roomName,
+              sender: speakerName,
+              content: t.text,
+              timestamp: ts,
+              type: 'text',
+            })) {
+              refreshMessages();
+            }
           }
         }
         break;
@@ -518,6 +522,7 @@ export default function App() {
   }, [send, roomName, isModerator]);
 
   const handleSummarize = useCallback(() => {
+    setSummaryLoading(true);
     send({
       action: 'summarize',
       roomId: roomName,
@@ -875,6 +880,7 @@ export default function App() {
         connectionStatus={status}
         isModerator={isModerator}
         aiEnabled={aiEnabled}
+        summaryLoading={summaryLoading}
         onCopyInvite={copyInviteLink}
         inviteCopied={copied}
         onStartBot={handleStartBot}
@@ -886,7 +892,6 @@ export default function App() {
         focusedSpeakerId={focusedSpeakerId}
         onFocusSpeaker={setFocusedSpeakerId}
         participantsCount={participantsCount}
-        tagModerator={tagModerator}
         onLeave={handleLeave}
         style={{ width: sidebarWidth, minWidth: sidebarWidth }}
       />

@@ -137,7 +137,9 @@ def register_meeting_handlers(socketio) -> None:
         room_id = session["room_id"]
         audit_log("summarize_start", payload["userId"] if payload else "unknown", room_id)
 
-        messages = get_all_messages(room_id)
+        all_messages = get_all_messages(room_id)
+        # 每次总结都取所有非总结消息（从最新消息往前取，不超过模型最大输入长度由 LLM 层处理）
+        messages = [m for m in all_messages if m.get("type") != "summary"]
         emit("meeting_status", {"message": "正在生成会议总结..."})
 
         # 异步生成总结
@@ -147,10 +149,8 @@ def register_meeting_handlers(socketio) -> None:
             loop = _get_or_create_loop()
             summary = loop.run_until_complete(generate_summary(room_id, messages))
 
-            # 空消息时 generate_summary 返回占位文案 "本次会议暂无聊天记录。"
-            # 不持久化也不广播，避免下一个人加入看到一条无意义的 summary。
             if not messages or summary == "本次会议暂无聊天记录。":
-                socketio.emit("meeting_status", {"message": "本次会议暂无聊天记录，已省略总结。"}, room=sid)
+                socketio.emit("meeting_status", {"message": "没有新的聊天记录或转写内容，无需生成总结。"}, room=sid)
                 return
 
             summary_message = add_message(room_id, {
@@ -159,12 +159,6 @@ def register_meeting_handlers(socketio) -> None:
                 "timestamp": int(time.time() * 1000),
                 "type": "summary",
             })
-
-            socketio.emit("meeting_summary", {
-                "roomId": room_id,
-                "summary": summary,
-                "timestamp": int(time.time() * 1000),
-            }, room=room_id)
 
             socketio.emit("meeting_chat", {"payload": summary_message}, room=room_id)
             audit_log("summarize_done", payload["userId"] if payload else "unknown", room_id)
