@@ -14,6 +14,9 @@ interface MessageListProps {
   onToggleRange?: (summaryId: string) => void;
   // 是否渲染 summary 卡片。聊天记录 Tab = false（用折叠条代替），会议总结 Tab = true（只显示卡片）
   renderSummaryCards?: boolean;
+  // 消息更新时是否自动滚动到底部。聊天记录 Tab 需要（跟随最新聊天）；
+  // 会议总结 Tab 关闭（持续说话时不希望页面反复下拉，用户切换 Tab 时由 Sidebar 手动滚动一次）。
+  autoScroll?: boolean;
 }
 
 // 根据 sender 名字生成稳定的颜色（同一人始终用同一色，多人会议便于区分）
@@ -114,14 +117,14 @@ function formatInline(s: string): string {
   return s.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
 }
 
-export function MessageList({ messages, onScrollToSummary, showSummaryNav, summaryNavItems, collapsedRanges, onToggleRange, renderSummaryCards }: MessageListProps) {
+export function MessageList({ messages, onScrollToSummary, showSummaryNav, summaryNavItems, collapsedRanges, onToggleRange, renderSummaryCards, autoScroll = true }: MessageListProps) {
   const listRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (listRef.current) {
+    if (autoScroll && listRef.current) {
       listRef.current.scrollTop = listRef.current.scrollHeight;
     }
-  }, [messages]);
+  }, [messages, autoScroll]);
 
   const formatTime = (timestamp: number) => {
     return new Date(timestamp).toLocaleTimeString('zh-CN', {

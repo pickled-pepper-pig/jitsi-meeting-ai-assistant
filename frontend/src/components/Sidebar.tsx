@@ -272,6 +272,9 @@ export function Sidebar({
         collapsedRanges={collapsedRanges}
         onToggleRange={toggleRange}
         renderSummaryCards={activeTab === 'summary'}
+        // 仅聊天记录 Tab 在消息更新时自动滚动到底部；
+        // 会议总结 Tab 关闭自动滚动，避免持续说话时页面反复下拉。
+        autoScroll={activeTab === 'chat'}
       />
 
       {/* 实时转写指示器 - 多 speaker 头像列表 + 选中聚焦查看 */}
