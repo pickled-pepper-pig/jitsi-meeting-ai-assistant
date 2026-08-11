@@ -66,7 +66,9 @@ services:
             - ENABLE_MODERATOR_CHECKS
             - ENABLE_XMPP_WEBSOCKET
             - ENABLE_JAAS_COMPONENTS
-            - GLOBAL_CONFIG
+            # 收紧 Prosody 断线清理：参会者意外掉线（笔记本合拢）后，smacks 冬眠会话
+            # 从默认 60s 缩短到 15s 即彻底下线并从会议移除，避免「旧参会者还在」。
+            - GLOBAL_CONFIG=smacks_hibernation_time = 15;\nsmacks_max_hibernation_time = 15;\nc2s_timeout = 60;
             - GLOBAL_MODULES
             - LDAP_URL
             - LDAP_BASE
