@@ -130,7 +130,7 @@ mkcert -key-file certs/jitsi.key -cert-file certs/jitsi.crt localhost 127.0.0.1 
 ./start-linux.sh
 
 # 3. 后端 ASR（conda 环境，先杀旧进程再后台运行）
-cd silan-asr-service
+cd ../silan-asr-service
 conda activate asr
 pkill -f "python main.py" 2>/dev/null; sleep 1
 # pip install -r requirements.txt && playwright install chromium
