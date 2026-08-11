@@ -125,7 +125,7 @@ cd meeting-ai-assistant
 
 # 2. Jitsi（改 .env 的 LOCAL_IP 为服务器 IP，生成证书，启动）
 cd jitsi
-sed -i 's/LOCAL_IP=.*/LOCAL_IP=<SERVER_IP>/' .env
+# sed -i 's/LOCAL_IP=.*/LOCAL_IP=<SERVER_IP>/' .env
 mkcert -key-file certs/jitsi.key -cert-file certs/jitsi.crt localhost 127.0.0.1 <SERVER_IP> ::1
 ./start-linux.sh
 
@@ -133,14 +133,15 @@ mkcert -key-file certs/jitsi.key -cert-file certs/jitsi.crt localhost 127.0.0.1 
 cd silan-asr-service
 conda activate asr
 pkill -f "python main.py" 2>/dev/null; sleep 1
-pip install -r requirements.txt && playwright install chromium
+# pip install -r requirements.txt && playwright install chromium
 setsid nohup env BOT_HEADLESS=true \
     /home/asr/bin/python main.py --device cpu --host 0.0.0.0 --port 19087 \
     > logs/asr.log 2>&1 < /dev/null & disown
 tail -f logs/asr.log
 
 # 4. 前端（先杀旧进程再后台运行）
-cd ../frontend && npm install
+cd ../frontend
+# npm install
 pkill -f "vite" 2>/dev/null; sleep 1
 mkcert -key-file localhost+3-key.pem -cert-file localhost+3.pem localhost 127.0.0.1 <SERVER_IP> ::1
 setsid nohup npx vite --port 19307 --host > vite.log 2>&1 < /dev/null & disown
