@@ -76,6 +76,8 @@ class WebSocketGatewayServer:
         self.audio_processor = AudioProcessor(self.app_config.audio_processor)
         self.session_manager = AudioSessionManager(self.app_config.session_manager)
         self.asr_worker = ASRWorker("ws-gateway-worker", self.app_config.asr_worker)
+        # 注入 SenseVoice API 配置（非本地推理，通过 SiLAN 网关调用）
+        self.asr_worker.set_sensevoice_config(self.app_config.sensevoice)
         self.transcript_service = TranscriptService(self.app_config.transcript_service)
         # 注入 ASR Worker 的标点模型，让 final 文本在 emit 时自动加标点
         # 静音超时 3000ms：会议场景用户句中可能停顿 1-2s，1.5s 太短会把一句话切碎

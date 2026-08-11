@@ -3,6 +3,11 @@ import re
 import threading
 import time
 import numpy as np
+import io
+import wave
+import json
+import urllib.request
+import urllib.error
 from typing import Dict, Optional, Callable
 from dataclasses import dataclass, field
 from app.config.settings import ASRWorkerConfig
@@ -109,7 +114,9 @@ class ASRWorker:
         
         self.model = None
         self.punc_model = None  # 标点恢复模型
-        self.sensevoice_model = None  # SenseVoice-Small 模型（段批处理）
+        # SenseVoice 不再本地加载模型，改为通过 API 调用
+        self.sensevoice_model = None
+        self._sv_config = None  # SenseVoice API 配置，由外部注入
         # SenseVoice 累积音频 buffer：session_id -> {pcm: np.ndarray, last_speech_time: float}
         self._sv_buffers: Dict[str, dict] = {}
         self._sv_lock = threading.Lock()
@@ -145,22 +152,8 @@ class ASRWorker:
             self.model = AutoModel(**model_args)
             logger.info(f"ASR model loaded successfully on {self.config.device}")
 
-            # 加载 SenseVoice-Small 模型（段批处理，非流式）
-            try:
-                logger.info("Loading SenseVoice-Small model: iic/SenseVoiceSmall")
-                sv_args = {
-                    "model": "iic/SenseVoiceSmall",
-                    "disable_pbar": True,
-                    "disable_update": True,
-                }
-                if self.config.device == "cuda":
-                    sv_args["device"] = "cuda"
-                self.sensevoice_model = AutoModel(**sv_args)
-                logger.info("SenseVoice-Small model loaded successfully")
-            except Exception as e:
-                logger.warning(f"Failed to load SenseVoice model, will fallback to Paraformer: {e}")
-                self.sensevoice_model = None
-            
+            # SenseVoice 不再本地加载，改为通过 SiLAN 网关 API 调用
+
             # 加载标点恢复模型（CT-Transformer）
             try:
                 logger.info("Loading punctuation model: ct-punc")
@@ -197,6 +190,74 @@ class ASRWorker:
     
     def set_transcript_callback(self, callback: Callable) -> None:
         self._transcript_callback = callback
+    
+    def set_sensevoice_config(self, sv_config) -> None:
+        """注入 SenseVoice API 配置（从 AppConfig.sensevoice 传入）"""
+        self._sv_config = sv_config
+        logger.info(f"[SenseVoice] API 配置已注入: base_url={sv_config.base_url}, model={sv_config.model}")
+    
+    def _call_sensevoice_api(self, audio_np: np.ndarray) -> Optional[str]:
+        """通过 SiLAN 网关 /v1/audio/transcriptions 调用 SenseVoice ASR
+        
+        Args:
+            audio_np: float32 numpy array, 16kHz 单声道, [-1.0, 1.0]
+            
+        Returns:
+            识别文本，失败返回 None
+        """
+        if not self._sv_config or not self._sv_config.api_key:
+            logger.warning("[SenseVoice] API Key 未配置，无法调用")
+            return None
+        
+        # float32 → int16 → WAV bytes
+        audio_int16 = (audio_np * 32768).astype(np.int16)
+        wav_buf = io.BytesIO()
+        with wave.open(wav_buf, "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(16000)
+            wf.writeframes(audio_int16.tobytes())
+        wav_bytes = wav_buf.getvalue()
+        
+        # multipart/form-data 边界
+        boundary = "----SenseVoiceBoundary" + str(int(time.time() * 1000))
+        
+        # 构建 multipart body
+        body = b""
+        # file 字段
+        body += f"--{boundary}\r\n".encode()
+        body += b'Content-Disposition: form-data; name="file"; filename="audio.wav"\r\n'
+        body += b"Content-Type: audio/wav\r\n\r\n"
+        body += wav_bytes
+        body += b"\r\n"
+        # model 字段
+        body += f"--{boundary}\r\n".encode()
+        body += b'Content-Disposition: form-data; name="model"\r\n\r\n'
+        body += self._sv_config.model.encode()
+        body += b"\r\n"
+        # 结束边界
+        body += f"--{boundary}--\r\n".encode()
+        
+        url = f"{self._sv_config.base_url}/audio/transcriptions"
+        headers = {
+            "Authorization": f"Bearer {self._sv_config.api_key}",
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+        }
+        
+        try:
+            req = urllib.request.Request(url, data=body, headers=headers, method="POST")
+            with urllib.request.urlopen(req, timeout=self._sv_config.timeout) as resp:
+                result = json.loads(resp.read().decode("utf-8"))
+                # OpenAI 兼容格式: {"text": "..."} 
+                text = result.get("text", "")
+                logger.info(f"[SenseVoice] API 识别结果: '{text}'")
+                return text if text.strip() else None
+        except urllib.error.HTTPError as e:
+            logger.error(f"[SenseVoice] API 调用失败 HTTP {e.code}: {e.read().decode('utf-8', errors='replace')[:500]}")
+            return None
+        except Exception as e:
+            logger.error(f"[SenseVoice] API 调用异常: {e}")
+            return None
     
     def start(self) -> None:
         self.scheduler.start()
@@ -257,7 +318,7 @@ class ASRWorker:
                 audio_np = self._resample(audio_np, task.sample_rate, 16000)
 
             # 根据会议选择的模型分流
-            if task.asr_model == "SenseVoiceSmall" and self.sensevoice_model is not None:
+            if task.asr_model == "SenseVoiceSmall" and self._sv_config is not None:
                 return self._process_sensevoice(task, audio_np)
             
             # 默认走 Paraformer 流式
@@ -394,39 +455,33 @@ class ASRWorker:
                     f"duration={len(segment)/SR:.1f}s, rms={segment_rms:.4f}, "
                     f"speech_ratio={speech_ratio:.2f}")
 
-        from funasr.utils.postprocess_utils import rich_transcription_postprocess
-        result = self.sensevoice_model.generate(
-            input=segment,
-            cache={},
-            language="zh",
-            use_itn=True,
-        )
+        # 通过 SiLAN 网关 API 调用 SenseVoice
+        text = self._call_sensevoice_api(segment)
+        if not text:
+            return None
 
-        if result and len(result) > 0:
-            raw_text = result[0].get("text", "")
-            text = rich_transcription_postprocess(raw_text)
-            # 去除 SenseVoice 情感/事件 emoji（😊😔😡😰🤢😮🎼👏😀😭🤧❓等）
-            text = re.sub(r'[\U0001f600-\U0001f64f\U0001f300-\U0001f5ff\u2764\ufe0f\u2763\ufe0f❓]', '', text).strip()
-            # 去除标点后检查实际文字长度，过滤"嗯"、"。"等无意义碎片
-            clean_text = re.sub(r'[，。？！、\s\u200b\U0001f000-\U0001ffff〈〈》]', '', text).strip()
-            logger.info(f"[SenseVoice] Recognized: '{text}' (clean: '{clean_text}', len={len(clean_text)})")
+        # 去除 SenseVoice 情感/事件 emoji（😊😔😡😰🤢😮🎼👏😀😭🤧❓等）
+        text = re.sub(r'[\U0001f600-\U0001f64f\U0001f300-\U0001f5ff\u2764\ufe0f\u2763\ufe0f❓]', '', text).strip()
+        # 去除标点后检查实际文字长度，过滤"嗯"、"。"等无意义碎片
+        clean_text = re.sub(r'[，。？！、\s\u200b\U0001f000-\U0001ffff〈〈》]', '', text).strip()
+        logger.info(f"[SenseVoice] Recognized: '{text}' (clean: '{clean_text}', len={len(clean_text)})")
 
-            if len(clean_text) >= SV_MIN_TEXT_LENGTH:
-                # 过滤 SenseVoice 典型幻觉碎片：短文本且命中关键词
-                if len(clean_text) <= 5 and any(kw in clean_text for kw in SV_HALLUCINATION_KEYWORDS):
-                    logger.info(f"[SenseVoice] Filtered hallucination: '{clean_text}'")
-                    return None
-                return {
-                    "session_id": task.session_id,
-                    # SenseVoice 整段识别直接返回 final，不区分 partial
-                    "interim_text": "",
-                    "final_text": "",
-                    # 通过 special flag 让 aggregator 直接跳过累积逻辑
-                    "sv_final_text": text,
-                    "timestamp": task.timestamp,
-                    "confidence": 1.0,
-                    "is_final": True,
-                }
+        if len(clean_text) >= SV_MIN_TEXT_LENGTH:
+            # 过滤 SenseVoice 典型幻觉碎片：短文本且命中关键词
+            if len(clean_text) <= 5 and any(kw in clean_text for kw in SV_HALLUCINATION_KEYWORDS):
+                logger.info(f"[SenseVoice] Filtered hallucination: '{clean_text}'")
+                return None
+            return {
+                "session_id": task.session_id,
+                # SenseVoice 整段识别直接返回 final，不区分 partial
+                "interim_text": "",
+                "final_text": "",
+                # 通过 special flag 让 aggregator 直接跳过累积逻辑
+                "sv_final_text": text,
+                "timestamp": task.timestamp,
+                "confidence": 1.0,
+                "is_final": True,
+            }
         return None
     
     def _resample(self, audio: np.ndarray, src_rate: int, dst_rate: int) -> np.ndarray:
@@ -467,16 +522,12 @@ class ASRWorker:
             # 先处理 SenseVoice 残余 buffer
             with self._sv_lock:
                 buf = self._sv_buffers.pop(session_id, None)
-            if buf is not None and self.sensevoice_model is not None:
+            if buf is not None and self._sv_config is not None:
                 segment = buf["pcm"]
                 if len(segment) >= 16000 * 0.3:
                     logger.info(f"[SenseVoice] Finalizing segment: session={session_id}, duration={len(segment)/16000:.1f}s")
-                    from funasr.utils.postprocess_utils import rich_transcription_postprocess
-                    result = self.sensevoice_model.generate(
-                        input=segment, cache={}, language="zh", use_itn=True,
-                    )
-                    if result and len(result) > 0:
-                        text = rich_transcription_postprocess(result[0].get("text", ""))
+                    text = self._call_sensevoice_api(segment)
+                    if text:
                         text = re.sub(r'[\U0001f600-\U0001f64f\U0001f300-\U0001f5ff\u2764\ufe0f\u2763\ufe0f❓]', '', text).strip()
                         if text.strip():
                             return {

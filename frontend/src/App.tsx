@@ -24,7 +24,7 @@ export default function App() {
   const [roomName, setRoomName] = useState(getUrlParam('room'));
   const [displayName, setDisplayName] = useState(getUrlParam('name'));
   const [isModerator, setIsModerator] = useState(true);
-  const [asrModel, setAsrModel] = useState<'paraformer-zh-streaming' | 'SenseVoiceSmall'>('paraformer-zh-streaming');
+  const [asrModel, setAsrModel] = useState<'paraformer-zh-streaming' | 'SenseVoiceSmall'>('SenseVoiceSmall');
   const [asrPanelOpen, setAsrPanelOpen] = useState(false);
   const [joined, setJoined] = useState(false);
   const [aiEnabled, setAiEnabled] = useState(false);
@@ -806,19 +806,6 @@ export default function App() {
               </button>
               {asrPanelOpen && (
                 <div className="asr-model-selector">
-                  <label className={`asr-model-option ${asrModel === 'paraformer-zh-streaming' ? 'active' : ''}`}>
-                    <input
-                      type="radio"
-                      name="asrModel"
-                      value="paraformer-zh-streaming"
-                      checked={asrModel === 'paraformer-zh-streaming'}
-                      onChange={() => setAsrModel('paraformer-zh-streaming')}
-                    />
-                    <div className="asr-model-info">
-                      <span className="asr-model-name">Paraformer-zh-streaming</span>
-                      <span className="asr-model-desc">流式 chunk｜CER 5.1%｜支持热词注入</span>
-                    </div>
-                  </label>
                   <label className={`asr-model-option ${asrModel === 'SenseVoiceSmall' ? 'active' : ''}`}>
                     <input
                       type="radio"
@@ -830,6 +817,19 @@ export default function App() {
                     <div className="asr-model-info">
                       <span className="asr-model-name">SenseVoice-Small</span>
                       <span className="asr-model-desc">段批处理｜CER 3.8%｜适合高准度纪要</span>
+                    </div>
+                  </label>
+                  <label className={`asr-model-option ${asrModel === 'paraformer-zh-streaming' ? 'active' : ''}`}>
+                    <input
+                      type="radio"
+                      name="asrModel"
+                      value="paraformer-zh-streaming"
+                      checked={asrModel === 'paraformer-zh-streaming'}
+                      onChange={() => setAsrModel('paraformer-zh-streaming')}
+                    />
+                    <div className="asr-model-info">
+                      <span className="asr-model-name">Paraformer-zh-streaming</span>
+                      <span className="asr-model-desc">流式 chunk｜CER 5.1%｜支持热词注入</span>
                     </div>
                   </label>
                 </div>

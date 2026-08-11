@@ -82,6 +82,15 @@ class LLMConfig:
 
 
 @dataclass
+class SenseVoiceConfig:
+    """SenseVoice ASR API 配置（通过 SiLAN 网关调用，非本地推理）"""
+    api_key: str = ""               # 与 LLM 共用同一个 API Key
+    base_url: str = "https://slapi.silan.com.cn/v1"
+    model: str = "SenseVoiceSmall"
+    timeout: int = 30               # 请求超时（秒）
+
+
+@dataclass
 class AppConfig:
     audio_processor: AudioProcessorConfig = field(default_factory=AudioProcessorConfig)
     asr_worker: ASRWorkerConfig = field(default_factory=ASRWorkerConfig)
@@ -91,6 +100,7 @@ class AppConfig:
     normalization: NormalizationConfig = field(default_factory=NormalizationConfig)
     transcript_service: TranscriptServiceConfig = field(default_factory=TranscriptServiceConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
+    sensevoice: SenseVoiceConfig = field(default_factory=SenseVoiceConfig)
 
 
 def load_config() -> AppConfig:
@@ -121,5 +131,11 @@ def load_config() -> AppConfig:
     config.llm.temperature = float(os.getenv("LLM_TEMPERATURE", "0.3"))
     config.llm.max_tokens = int(os.getenv("LLM_MAX_TOKENS", "4096"))
     config.llm.timeout = int(os.getenv("LLM_TIMEOUT", "60"))
+
+    # SenseVoice API 配置（默认与 LLM 共用同一个 API Key）
+    config.sensevoice.api_key = os.getenv("SENSEVOICE_API_KEY", config.llm.api_key)
+    config.sensevoice.base_url = os.getenv("SENSEVOICE_BASE_URL", "https://slapi.silan.com.cn/v1")
+    config.sensevoice.model = os.getenv("SENSEVOICE_MODEL", "SenseVoiceSmall")
+    config.sensevoice.timeout = int(os.getenv("SENSEVOICE_TIMEOUT", "30"))
 
     return config
