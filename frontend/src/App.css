@@ -70,6 +70,38 @@ body {
   margin-right: 6px;
 }
 
+/* 房间名输入框 + 随机生成按钮（按钮放在输入框右侧） */
+.room-input-group {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.room-input-group input[type="text"] {
+  flex: 1;
+  min-width: 0;
+}
+
+.room-random-btn {
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  background: #f9fafb;
+  font-size: 18px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.room-random-btn:hover {
+  border-color: #667eea;
+  background: #f0f1ff;
+}
+
 .join-btn {
   width: 100%;
   padding: 12px;

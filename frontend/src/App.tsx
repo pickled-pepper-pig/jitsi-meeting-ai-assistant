@@ -21,6 +21,16 @@ export default function App() {
     return params.get(name) || '';
   };
 
+  // 随机生成 10 位英文字母 + 数字组合的房间名
+  const generateRoomName = () => {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    let result = '';
+    for (let i = 0; i < 10; i++) {
+      result += chars[Math.floor(Math.random() * chars.length)];
+    }
+    return result;
+  };
+
   const [roomName, setRoomName] = useState(getUrlParam('room'));
   const [displayName, setDisplayName] = useState(getUrlParam('name'));
   const [isModerator, setIsModerator] = useState(true);
@@ -723,12 +733,23 @@ export default function App() {
 
           <div className="form-group">
             <label>房间名</label>
-            <input
-              type="text"
-              value={roomName}
-              onChange={(e) => setRoomName(e.target.value)}
-              placeholder="输入房间名（如：team-meeting-001）"
-            />
+            <div className="room-input-group">
+              <input
+                type="text"
+                value={roomName}
+                onChange={(e) => setRoomName(e.target.value)}
+                placeholder="请输入房间名，或点击右侧 🎲 随机生成"
+              />
+              <button
+                type="button"
+                className="room-random-btn"
+                title="随机生成房间名"
+                aria-label="随机生成房间名"
+                onClick={() => setRoomName(generateRoomName())}
+              >
+                🎲
+              </button>
+            </div>
           </div>
 
           <div className="form-group">
@@ -737,7 +758,7 @@ export default function App() {
               type="text"
               value={displayName}
               onChange={(e) => setDisplayName(e.target.value)}
-              placeholder="输入你的名字"
+              placeholder="请输入你的名字"
             />
           </div>
 
