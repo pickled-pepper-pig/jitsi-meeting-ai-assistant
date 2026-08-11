@@ -389,33 +389,10 @@ export default function App() {
       // 同步后端确认的 ASR 模型
       if (result.asrModel) setAsrModel(result.asrModel as 'paraformer-zh-streaming' | 'SenseVoiceSmall');
 
-      // 主持人重连且上次异常退出（endedAt=false），有历史纪要：弹窗确认是否清空
-      if (result.role === 'moderator' && result.reconnect && !result.history_cleared) {
-        setCustomAlert({
-          icon: '📋',
-          title: '发现上一轮会议纪要',
-          message: '上次会议未正常结束，仍保留有历史纪要。是否清空并开始新一轮会议？',
-        });
-        // 临时存储一个待确认状态，用 customAlert 的按钮无法直接做两个选项，
-        // 这里简化：弹窗提示后，主持人在 Sidebar 里可手动点"清空纪要"按钮
-        // （见下方 clearHistory 函数）。或者直接清空——根据产品需求选其一。
-        // 这里选择直接清空，避免主持人还要额外操作。
-        try {
-          await fetch(
-            `${API_CONFIG.baseUrl}/api/meetings/${encodeURIComponent(roomName.trim())}/clear-history`,
-            {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ token: result.token }),
-            },
-          );
-          messageBufferRef.current.clear();
-          setMessages([]);
-          console.log('[App] 主持人重连，已清空上一轮异常退出的纪要');
-        } catch (e) {
-          console.warn('[App] 清空历史纪要失败:', e);
-        }
-      }
+      // 是否需要展示上一轮纪要由后端 claim_moderator 按会议状态决定：
+      //   - 上一轮已结束（history_cleared=true）→ 后端已清空，下方 /messages 拉到空列表
+      //   - 上一轮未结束（history_cleared=false）→ 后端保留，下方 /messages 继续展示
+      // 因此这里不再主动清空历史，直接交给下方 HTTP 兜底加载即可。
 
       // HTTP 兜底拉取房间历史消息（chat + summary）：
       // - 即便 WS 还没建连/握手失败，新用户也能立刻看到进入前的会议纪要

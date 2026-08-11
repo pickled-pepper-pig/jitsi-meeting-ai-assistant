@@ -312,50 +312,63 @@ def claim_moderator(room_id: str, user_id: str, user_name: Optional[str] = None)
       - firstModeratorId 为空 → 写入并返回 ok
       - user_id == firstModeratorId → 重连场景，允许
       - 否则 → 拒绝，返回已有人 userId / userName
+
+    清空策略（按上一轮会议是否结束判断，endedAt 对应 sqlite meetings.status 的 finished）：
+      - 上一轮已结束（endedAt=True，即 status=finished）→ 视为开启新一轮会议：
+        清空聊天记录、会议总结与参会者列表，从空白开始。
+      - 上一轮未结束（endedAt=False，如异常断开/合拢笔记本/刷新）→ 视为恢复原会议：
+        保留并继续展示上一轮的聊天记录、会议总结与参会者。
     """
     with _lock:
         meeting = get_or_create_meeting(room_id)
         current = meeting.get("firstModeratorId")
+        finished = meeting.get("endedAt", False)
         if not current:
-            # 首次认领 = 主持人「创建会议」：清空上一轮会议的历史纪要，
-            # 让本次会议的所有人（含后加入者）都从空纪要开始。
-            # 重连场景（current == user_id）不清空。
+            # 房间暂无主持人 = 创建/接管会议：正常情况开启全新一轮。
+            # 若遗留的上一轮已结束则清空历史与参会者；未结束则保留（边缘情况兜底）。
             meeting["firstModeratorId"] = user_id
             if user_name:
                 meeting["firstModeratorName"] = user_name
-            meeting["messages"] = []
-            meeting["seq"] = 0
+            meeting["endedAt"] = False
+            if finished:
+                meeting["messages"] = []
+                meeting["seq"] = 0
+                meeting["participants"] = []
+                sqlite_store.clear_room_data(room_id)
+                logger.info(f"[meeting_state] 主持人 {user_name or user_id} 创建会议 {room_id}（上一轮已结束），已清空历史纪要")
+            else:
+                logger.info(f"[meeting_state] 主持人 {user_name or user_id} 创建会议 {room_id}")
             _save_to_redis(room_id, meeting)
-            sqlite_store.clear_room_data(room_id)
             sqlite_store.upsert_meeting(
                 room_id, status="running",
                 first_moderator_id=user_id, first_moderator_name=user_name,
                 started_at=int(time.time() * 1000),
             )
-            logger.info(f"[meeting_state] 主持人 {user_name or user_id} 创建会议 {room_id}，已清空历史纪要")
             return {
                 "ok": True,
                 "firstModeratorId": user_id,
                 "firstModeratorName": meeting.get("firstModeratorName"),
             }
         if current == user_id:
-            # 重连场景：根据上次会议是否正常结束决定是否清空纪要
-            ended = meeting.get("endedAt", False)
-            if ended:
-                # 上次已正常结束（点了离开/挂断），本次视为新一轮会议：清空纪要
+            # 同人重连：按上一轮是否结束判断。
+            # 已结束 → 清空，开启新一轮；未结束 → 保留上一轮内容，继续展示。
+            cleared = finished
+            if finished:
                 meeting["messages"] = []
                 meeting["seq"] = 0
-                meeting["endedAt"] = False
                 meeting["participants"] = []
-                _save_to_redis(room_id, meeting)
+                meeting["endedAt"] = False
                 sqlite_store.clear_room_data(room_id)
-                logger.info(f"[meeting_state] 主持人 {user_name or user_id} 重连会议 {room_id}（上次已结束），清空历史纪要")
+                logger.info(f"[meeting_state] 主持人 {user_name or user_id} 重进会议 {room_id}（上一轮已结束），已清空历史纪要")
+            else:
+                logger.info(f"[meeting_state] 主持人 {user_name or user_id} 重进会议 {room_id}（上一轮未结束），保留历史纪要")
+            _save_to_redis(room_id, meeting)
             return {
                 "ok": True,
                 "firstModeratorId": current,
                 "firstModeratorName": meeting.get("firstModeratorName"),
                 "reconnect": True,
-                "history_cleared": ended,
+                "history_cleared": cleared,
             }
         return {
             "ok": False,
