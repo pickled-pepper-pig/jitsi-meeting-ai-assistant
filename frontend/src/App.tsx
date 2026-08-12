@@ -21,9 +21,13 @@ export default function App() {
     return params.get(name) || '';
   };
 
+  // Jitsi 要求房间名全小写，统一在入口处转换，避免大写字母导致
+  // "Invalid conference name" 错误（Jitsi 内部 toLowerCase 后与原始名不匹配）
+  const sanitizeRoomName = (name: string) => name.trim().toLowerCase();
+
   // 随机生成 10 位英文字母 + 数字组合的房间名
   const generateRoomName = () => {
-    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
     let result = '';
     for (let i = 0; i < 10; i++) {
       result += chars[Math.floor(Math.random() * chars.length)];
@@ -31,7 +35,10 @@ export default function App() {
     return result;
   };
 
-  const [roomName, setRoomName] = useState(getUrlParam('room'));
+  const [roomName, setRoomName] = useState(() => {
+    const r = getUrlParam('room');
+    return r ? r.toLowerCase() : r;
+  });
   const [displayName, setDisplayName] = useState(getUrlParam('name'));
   const [isModerator, setIsModerator] = useState(true);
   const [asrModel, setAsrModel] = useState<'paraformer-zh-streaming' | 'SenseVoiceSmall'>('SenseVoiceSmall');
@@ -391,7 +398,7 @@ export default function App() {
     userIdRef.current = userId;
 
     try {
-      const result = await fetchJoinToken(roomName.trim(), userId, displayName.trim(), isModerator, asrModel);
+      const result = await fetchJoinToken(sanitizeRoomName(roomName), userId, displayName.trim(), isModerator, asrModel);
       tokenRef.current = result.token;
       // 真实角色由后端决定（避免前端伪造）
       setIsModerator(result.role === 'moderator');
@@ -409,7 +416,7 @@ export default function App() {
       // - 与 WS 的 room_state_snapshot 互为冗余，messageBuffer 按 seq 去重
       try {
         const historyRes = await fetch(
-          `${API_CONFIG.baseUrl}/api/meetings/${encodeURIComponent(roomName.trim())}/messages?token=${encodeURIComponent(result.token)}`,
+          `${API_CONFIG.baseUrl}/api/meetings/${encodeURIComponent(sanitizeRoomName(roomName))}/messages?token=${encodeURIComponent(result.token)}`,
         );
         if (historyRes.ok) {
           const history = await historyRes.json();
@@ -424,7 +431,7 @@ export default function App() {
       }
 
       setJoined(true);
-      connect(roomName.trim(), result.token);
+      connect(sanitizeRoomName(roomName), result.token);
     } catch (err: any) {
       if (err?.code === 'moderator_occupied') {
         // 显示提示窗，不进入会议界面
@@ -737,8 +744,8 @@ export default function App() {
               <input
                 type="text"
                 value={roomName}
-                onChange={(e) => setRoomName(e.target.value)}
-                placeholder="请输入房间名，或点击右侧 🎲 随机生成"
+                onChange={(e) => setRoomName(e.target.value.toLowerCase())}
+                placeholder="请输入房间名（自动转小写），或点击右侧 🎲 随机生成"
               />
               <button
                 type="button"

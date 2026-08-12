@@ -694,7 +694,7 @@ class WebSocketGatewayServer:
             _main_loop = self._loop
             asyncio.create_task(self._heartbeat())
 
-            # SSL 配置：使用前端相同的证书（覆盖 192.0.36.227）
+            # SSL 配置：使用前端相同的证书（覆盖 192.0.36.137）
             ssl_ctx = None
             cert_dir = os.environ.get("SSL_CERT_DIR", "")
             if cert_dir:
