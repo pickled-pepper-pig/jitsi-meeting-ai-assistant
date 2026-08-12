@@ -120,8 +120,8 @@ cd frontend && npm install && npx vite --port 19307 --host
 
 ```bash
 # 1. 拉代码
-git pull origin main
 cd meeting-ai-assistant
+git pull origin main
 
 # 2. Jitsi（改 .env 的 LOCAL_IP 为服务器 IP，生成证书，启动）
 cd jitsi
