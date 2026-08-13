@@ -16,6 +16,7 @@
 - **Meeting Agent**：Playwright + Headless Chromium 控制的 Recorder Bot，作为隐藏参会者加入会议捕获音频
 - **JWT 认证**：HS256 共享密钥，支持 Jitsi XMPP affiliation
 - **Redis 状态**：会议状态持久化，支持内存降级
+- **首次安全确认引导**：自签名证书环境首次进入会议时，内嵌两步向导引导用户打开信任窗口完成确认，无需手动复制粘贴地址
 - **本地部署**：Docker 一键部署 Jitsi
 
 ---

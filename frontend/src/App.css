@@ -1485,6 +1485,94 @@ body {
   opacity: 0.9;
 }
 
+/* ===== 首次证书信任引导（两步向导） ===== */
+.cert-wizard-modal {
+  width: 520px;
+}
+.cert-wizard-step {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin: 0 auto 20px;
+}
+.cert-wizard-step-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #9ca3af;
+}
+.cert-wizard-step-item.active {
+  color: #667eea;
+  font-weight: 600;
+}
+.cert-wizard-step-item .dot {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #e5e7eb;
+  color: #6b7280;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 600;
+}
+.cert-wizard-step-item.active .dot,
+.cert-wizard-step-item.done .dot {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: #fff;
+}
+.cert-wizard-step-connector {
+  width: 28px;
+  height: 2px;
+  background: #e5e7eb;
+}
+.cert-wizard-step-connector.done {
+  background: #667eea;
+}
+.cert-wizard-title {
+  font-size: 15px;
+  color: #374151;
+  text-align: left;
+  margin: 0 0 8px;
+  font-weight: 600;
+}
+.cert-wizard-desc {
+  font-size: 13px;
+  color: #6b7280;
+  text-align: left;
+  line-height: 1.6;
+  margin: 0 0 20px;
+}
+.cert-wizard-open {
+  width: 100%;
+  padding: 14px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: #fff;
+  border: none;
+  border-radius: 10px;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.2s, transform 0.1s;
+}
+.cert-wizard-open:hover { opacity: 0.92; }
+.cert-wizard-open:active { transform: translateY(1px); }
+.cert-wizard-back {
+  margin-top: 12px;
+  width: 100%;
+  padding: 10px;
+  background: #fff;
+  color: #667eea;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.cert-wizard-back:hover { background: #f8fafc; }
+
 /* ===== 离开按钮 ===== */
 .leave-btn {
   display: none;

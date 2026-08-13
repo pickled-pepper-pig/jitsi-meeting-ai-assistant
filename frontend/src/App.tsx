@@ -46,6 +46,33 @@ export default function App() {
   const [joined, setJoined] = useState(false);
   const [aiEnabled, setAiEnabled] = useState(false);
   const [copied, setCopied] = useState(false);
+  // 首次进入会议前，Jitsi(19447) 自签名证书未信任时的引导浮层
+  const [jitsiCertPending, setJitsiCertPending] = useState(false);
+  // 引导浮层的步骤：'open' 先打开信任窗口 → 'confirm' 确认已信任后进入
+  const [certTrustStep, setCertTrustStep] = useState<'open' | 'confirm'>('open');
+
+  // 探测 Jitsi 站的证书是否已被浏览器信任：
+  // 未信任时浏览器会直接以 NET::ERR_CERT_AUTHORITY_INVALID 断开并 reject fetch，
+  // 已信任（即使跨域 no-cors 是 opaque 响应）则 resolve。
+  // 因此用 fetch 是否 reject 来判断证书是否已信任，据此决定要不要弹引导。
+  // 参数 forceDebug=true 时强制返回"未信任"，仅用于 ?forceCertTrust=1 的调试复现；
+  // 正常应传 false（走真实探测），这样点"我已信任，进入会议"时能真正进入。
+  const checkJitsiCertTrusted = useCallback(async (forceDebug = false): Promise<boolean> => {
+    if (forceDebug) return false;
+    try {
+      await fetch(`${getJitsiProtocol()}//${getJitsiDomain()}/`, {
+        method: 'GET',
+        mode: 'no-cors',
+        cache: 'no-store',
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }, []);
+  // 用 ref 提供给 handleJoin 使用，避免闭包依赖问题
+  const checkJitsiCertTrustedRef = useRef(checkJitsiCertTrusted);
+  checkJitsiCertTrustedRef.current = checkJitsiCertTrusted;
 
   // 可拖动分割线：控制 Jitsi iframe 与会议纪要 sidebar 的宽度分配
   const SIDEBAR_DEFAULT = 460;
@@ -430,6 +457,20 @@ export default function App() {
         // 拉取失败不阻塞加入，WS 后续 snapshot 会补齐
       }
 
+      // 首次进入会议前，先探测 Jitsi(19447) 自签名证书是否已被浏览器信任。
+      // 未信任时 Jitsi iframe 的信令 WebSocket 会被浏览器静默拦截，表现为
+      // 视频/音频按钮一直转圈。这里未信任则先弹引导浮层，让用户在该页内
+      // 内嵌的 19447 iframe 里点一次"继续"完成信任，避免用户手动复制粘贴 URL。
+      // 调试：URL 带 ?forceCertTrust=1 时强制按"未信任"弹引导，方便复现。
+      const forceDebug = typeof window !== 'undefined'
+        && new URLSearchParams(window.location.search).get('forceCertTrust') === '1';
+      const trusted = await checkJitsiCertTrustedRef.current(forceDebug);
+      if (!trusted) {
+        setCertTrustStep('open');
+        setJitsiCertPending(true);
+        return;
+      }
+
       setJoined(true);
       connect(sanitizeRoomName(roomName), result.token);
     } catch (err: any) {
@@ -483,6 +524,20 @@ export default function App() {
       sender,
     });
   }, [send, roomName]);
+
+  // 证书引导浮层里点击"我已信任，进入会议"后的处理：真实探测，通过则进入会议。
+  // （这里不用 forceDebug，保证按钮能真正进入；forceDebug 只作用于初次探测）
+  const enterAfterCertTrusted = useCallback(async () => {
+    const trusted = await checkJitsiCertTrustedRef.current(false);
+    if (!trusted) {
+      // 仍未信任，停留在引导浮层（用户可能还没在 iframe 里点"继续"）
+      setJitsiCertPending(true);
+      return;
+    }
+    setJitsiCertPending(false);
+    setJoined(true);
+    connect(sanitizeRoomName(roomName), tokenRef.current);
+  }, [roomName, connect, sanitizeRoomName]);
 
   const handleOutgoingMessage = useCallback((message: string) => {
     send({
@@ -716,6 +771,62 @@ export default function App() {
               >
                 知道了
               </button>
+            </div>
+          </div>
+        )}
+        {jitsiCertPending && (
+          <div className="proxy-warning-overlay">
+            <div className="proxy-warning-modal cert-wizard-modal">
+              <div className="proxy-warning-icon">🔒</div>
+              <h3>首次进入需完成安全确认</h3>
+
+              {/* 步骤进度条 */}
+              <div className="cert-wizard-step">
+                <div className={`cert-wizard-step-item ${certTrustStep === 'confirm' ? 'done' : 'active'}`}>
+                  <span className="dot">1</span> 打开信任窗口
+                </div>
+                <div className={`cert-wizard-step-connector ${certTrustStep === 'confirm' ? 'done' : ''}`} />
+                <div className={`cert-wizard-step-item ${certTrustStep === 'confirm' ? 'active' : ''}`}>
+                  <span className="dot">2</span> 完成确认
+                </div>
+              </div>
+
+              {certTrustStep === 'open' ? (
+                <>
+                  <p className="cert-wizard-title">打开安全确认窗口</p>
+                  <p className="cert-wizard-desc">
+                    点击按钮，在新页面点「高级」→「继续前往」即可，仅首次需要。
+                  </p>
+                  <button
+                    className="cert-wizard-open"
+                    onClick={() => {
+                      window.open(`${getJitsiProtocol()}//${getJitsiDomain()}/`, '_blank');
+                      setCertTrustStep('confirm');
+                    }}
+                  >
+                    打开信任窗口
+                  </button>
+                </>
+              ) : (
+                <>
+                  <p className="cert-wizard-title">进入会议</p>
+                  <p className="cert-wizard-desc">
+                    已在弹出页面点过「继续前往」，点击进入会议。
+                  </p>
+                  <button
+                    className="cert-wizard-open"
+                    onClick={() => enterAfterCertTrusted()}
+                  >
+                    我已信任，进入会议
+                  </button>
+                  <button
+                    className="cert-wizard-back"
+                    onClick={() => setCertTrustStep('open')}
+                  >
+                    ← 返回重开窗口
+                  </button>
+                </>
+              )}
             </div>
           </div>
         )}
